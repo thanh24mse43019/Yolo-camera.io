@@ -635,7 +635,7 @@
       </div>
       <div class="config-card" style="grid-column: span 1;">
         <div class="config-label">ONNX Model Path (relative to repo root)</div>
-        <input type="text" class="model-path-input" id="modelPath" value="models/yolov8n.onnx" placeholder="models/yolov8n.onnx">
+        <input type="text" class="model-path-input" id="modelPath" value="models/best.onnx" placeholder="models/best.onnx">
       </div>
     </div>
   </div>
@@ -841,7 +841,7 @@ function updateLoading(text, sub = '') {
 
 // ─── ONNX Model Loading ────────────────────────────────────────────────────
 async function loadModel() {
-  const path = modelPathInput.value.trim() || 'models/yolov8n.onnx';
+  const path = modelPathInput.value.trim() || 'models/best.onnx';
   updateLoading('Loading ONNX model…', path);
   miStatus.textContent = 'Loading…';
   setStatus('', 'Loading model');
