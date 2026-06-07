@@ -635,7 +635,7 @@
       </div>
       <div class="config-card" style="grid-column: span 1;">
         <div class="config-label">ONNX Model Path (relative to repo root)</div>
-        <input type="text" class="model-path-input" id="modelPath" value="models/best.onnx" placeholder="models/best.onnx">
+        <input type="text" class="model-path-input" id="modelPath" value="models/yolov8n.onnx" placeholder="models/yolov8n.onnx">
       </div>
     </div>
   </div>
@@ -680,7 +680,7 @@
       <div class="model-info-row"><span>Input Shape</span><span id="miShape">—</span></div>
       <div class="model-info-row"><span>Model Size</span><span id="miSize">—</span></div>
       <div class="model-info-row"><span>Est. GFLOPs</span><span id="miGFLOP">—</span></div>
-      <div class="model-info-row"><span>Backend</span><span id="miBackend">WebAssembly</span></div>
+      <div class="model-info-row"><span>Backend</span><span id="miBackend">Detecting…</span></div>
       <div class="model-info-row"><span>Classes</span><span id="miClasses">—</span></div>
     </div>
 
@@ -841,7 +841,7 @@ function updateLoading(text, sub = '') {
 
 // ─── ONNX Model Loading ────────────────────────────────────────────────────
 async function loadModel() {
-  const path = modelPathInput.value.trim() || 'models/best.onnx';
+  const path = modelPathInput.value.trim() || 'models/yolov8n.onnx';
   updateLoading('Loading ONNX model…', path);
   miStatus.textContent = 'Loading…';
   setStatus('', 'Loading model');
@@ -853,13 +853,36 @@ async function loadModel() {
     const arrayBuffer = await res.arrayBuffer();
     modelSizeMB = (arrayBuffer.byteLength / (1024 * 1024));
 
-    updateLoading('Creating inference session…', 'Compiling WebAssembly');
-    ort.env.wasm.numThreads = navigator.hardwareConcurrency > 4 ? 4 : 2;
+    // Try WebGPU first, fall back to WASM
+    let usedBackend = 'wasm';
+    session = null;
 
-    session = await ort.InferenceSession.create(arrayBuffer, {
-      executionProviders: ['wasm'],
-      graphOptimizationLevel: 'all',
-    });
+    if (navigator.gpu) {
+      try {
+        updateLoading('Requesting WebGPU adapter…', 'Checking GPU availability');
+        const adapter = await navigator.gpu.requestAdapter();
+        if (!adapter) throw new Error('No WebGPU adapter');
+        updateLoading('Creating inference session…', 'Compiling WebGPU shaders (first run may take a moment)');
+        session = await ort.InferenceSession.create(arrayBuffer, {
+          executionProviders: ['webgpu'],
+          graphOptimizationLevel: 'all',
+        });
+        usedBackend = 'webgpu';
+      } catch (gpuErr) {
+        console.warn('WebGPU unavailable, falling back to WASM:', gpuErr);
+        session = null;
+      }
+    }
+
+    if (!session) {
+      updateLoading('Creating inference session…', 'Compiling WebAssembly (WebGPU not available)');
+      ort.env.wasm.numThreads = Math.min(navigator.hardwareConcurrency || 2, 4);
+      session = await ort.InferenceSession.create(arrayBuffer, {
+        executionProviders: ['wasm'],
+        graphOptimizationLevel: 'all',
+      });
+      usedBackend = 'wasm';
+    }
 
     // Inspect input shape
     const inputName = session.inputNames[0];
@@ -881,11 +904,13 @@ async function loadModel() {
     miSize.textContent = modelSizeMB.toFixed(2) + ' MB';
     miGFLOP.textContent = gflops.toFixed(2) + ' GFLOPs';
     miClasses.textContent = COCO_CLASSES.length;
+    miBackend.textContent = usedBackend === 'webgpu' ? '⚡ WebGPU' : 'WebAssembly';
+    miBackend.style.color = usedBackend === 'webgpu' ? 'var(--accent2)' : 'var(--accent)';
 
     modelLoaded = true;
     setStatus('ready', 'Model Ready');
     btnStart.disabled = false;
-    showToast('Model loaded — ' + modelSizeMB.toFixed(1) + ' MB');
+    showToast(`Model loaded (${usedBackend.toUpperCase()}) — ${modelSizeMB.toFixed(1)} MB`);
 
   } catch (err) {
     console.error(err);
