@@ -1,99 +1,137 @@
-# Yolo-camera.io 
-# YOLOVision — Real-Time Object Detection on GitHub Pages
+# YOLOVision — Real-time YOLO Detection via Browser
 
-A fully client-side YOLO object detection app powered by ONNX Runtime Web.  
-No server needed — runs entirely in the browser via WebAssembly.
+A split architecture: the **frontend** lives on GitHub Pages and captures your webcam, while the **backend** runs on your own server with a YOLO `.pt` model.
 
 ---
 
-##  Repo Structure
+## Architecture
 
 ```
-your-repo/
-├── index.html          ← The web app (this file)
-├── models/
-│   └── yolov8n.onnx    ← Your ONNX model goes here
-└── README.md
+Browser (GitHub Pages)
+  └─ Webcam frame (JPEG) ──POST /detect──► Your Server (FastAPI)
+                                                └─ YOLO .pt model
+  ◄── JSON detections, FPS, ms, GFLOPs ─────────┘
 ```
 
 ---
 
-## 🚀 Setup
+## 1 — Backend Setup (your server)
 
-### 1. Place your ONNX model
-Put your exported YOLO `.onnx` file in the `models/` folder (or any subfolder).  
-Update the **Model Path** field in the UI to match, e.g. `models/yolov8n.onnx`.
-
-**Supported models:**
-- YOLOv8n / s / m / l / x (COCO 80-class, 640×640 input)
-- YOLOv5 exported to ONNX
-- Any YOLO variant with output shape `[1, 84, N]` (cx, cy, w, h + 80 class scores)
-
-### 2. Enable GitHub Pages
-Go to your repo → **Settings → Pages → Source: Deploy from branch → main / root**.  
-Your app will be live at `https://<username>.github.io/<repo>/`.
-
-### 3. ⚠️ Large file warning
-GitHub has a **100 MB file size limit**. For larger models use [Git LFS](https://git-lfs.com/):
+### Requirements
 
 ```bash
-git lfs install
-git lfs track "*.onnx"
-git add .gitattributes
-git add models/yolov8n.onnx
-git commit -m "Add YOLO ONNX model via LFS"
-git push
+pip install fastapi uvicorn ultralytics pillow python-multipart
 ```
+
+### Run
+
+```bash
+# With default yolov8n.pt (downloads automatically if not present)
+python server.py
+
+# With your own model
+python server.py --model /path/to/your_model.pt --port 8000
+
+# With GPU
+python server.py --model best.pt --device cuda --port 8000
+```
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--model` | `yolov8n.pt` | Path to your YOLO `.pt` file |
+| `--port` | `8000` | Port to listen on |
+| `--host` | `0.0.0.0` | Bind address |
+| `--device` | auto | `cpu`, `cuda`, or `mps` |
+
+### Make it reachable from the internet
+
+Your server needs a **public IP or domain** so the browser can reach it.
+
+Options:
+- **VPS** (DigitalOcean, Linode, etc.): run `python server.py` and open port 8000 in the firewall
+- **ngrok** (quick dev tunnel): `ngrok http 8000` → use the `https://xxxx.ngrok.io` URL in the frontend
+- **Cloudflare Tunnel**: `cloudflared tunnel --url http://localhost:8000`
+- **HTTPS required**: if your GitHub Pages site is served over HTTPS, your backend must also be HTTPS (use a reverse proxy like nginx + certbot, or a tunnel)
 
 ---
 
-## 🎛️ Features
+## 2 — Frontend Setup (GitHub Pages)
 
-| Feature | Detail |
-|---|---|
-| **Real-time detection** | Webcam feed via `getUserMedia` |
-| **ONNX Runtime Web** | WebAssembly backend, no GPU needed |
-| **NMS** | Client-side Non-Max Suppression |
-| **Live metrics** | FPS, inference time, object count, confidence |
-| **Session summary** | Avg FPS, peak FPS, avg inference, top class |
-| **Model info** | Size (MB), estimated GFLOPs, input shape |
-| **Export** | Download session report as JSON |
-| **Configurable** | Confidence & IoU thresholds via sliders |
+### Deploy
 
----
+1. Create a GitHub repo (e.g. `yolovision`)
+2. Copy `index.html` into the repo root
+3. Go to **Settings → Pages → Source → main / root**
+4. Your site will be live at `https://yourusername.github.io/yolovision/`
 
-## 📊 GFLOPs Estimation
+### Usage
 
-The app estimates GFLOPs using:
-```
-GFLOPs ≈ 8.7 × (model_size_MB / 6.0) × (input_pixels / 640²)
-```
-Calibrated against YOLOv8n (6 MB, 8.7 GFLOPs @ 640×640).  
-For exact values, use the [Ultralytics benchmark tool](https://docs.ultralytics.com).
+1. Open the GitHub Pages URL in your browser
+2. Enter your backend URL in the **Backend Server URL** field (e.g. `https://your-server.com:8000`)
+3. Adjust the **confidence threshold** slider
+4. Click **▶ Start Camera**
 
 ---
 
-## 🛠️ Exporting your YOLO model to ONNX
+## API Reference
+
+### `GET /model_info`
+
+Returns static model metadata.
+
+```json
+{
+  "name": "yolov8n",
+  "params": "3.2M",
+  "device": "cuda:0",
+  "imgsz": "640×640",
+  "gflops": 8.7,
+  "num_classes": 80,
+  "classes": ["person", "bicycle", ...]
+}
+```
+
+### `POST /detect`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `frame` | file (JPEG/PNG) | Camera frame |
+| `conf` | float (0.01–1.0) | Confidence threshold |
+
+Returns:
+
+```json
+{
+  "detections": [
+    { "label": "person", "confidence": 0.93, "box": [120.0, 45.0, 380.0, 480.0] }
+  ],
+  "inference_ms": 18.4,
+  "model_gflops": 8.7,
+  "model_info": { "name": "yolov8n", "params": "3.2M", "device": "cuda:0", "imgsz": "640×640" }
+}
+```
+
+Box coordinates are in the **frame coordinate space** (640×360 as sent by the browser).
+
+---
+
+## CORS
+
+The server allows **all origins** by default. For production, edit `server.py` and restrict:
 
 ```python
-# YOLOv8
-from ultralytics import YOLO
-model = YOLO('yolov8n.pt')
-model.export(format='onnx', imgsz=640, opset=12)
-
-# YOLOv5
-python export.py --weights yolov5n.pt --include onnx --opset 12
+allow_origins=["https://yourusername.github.io"],
 ```
 
 ---
 
-## Browser Requirements
+## Metrics Explained
 
-- Chrome 90+, Edge 90+, Firefox 90+, Safari 15.4+
-- Camera permission required for live detection
-- WebAssembly support (all modern browsers)
-
----
-
-## 📄 License
-MIT
+| Metric | Source |
+|--------|--------|
+| **FPS** | Rendered frames per second in the browser |
+| **Latency (ms)** | Full round-trip time: send frame → receive detections |
+| **Model GFLOPs** | Reported by `ultralytics` at model load time |
+| **Objects** | Count of detections in the current frame |
