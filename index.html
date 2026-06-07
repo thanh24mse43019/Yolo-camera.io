@@ -1,0 +1,1277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>YOLO Vision — Real-Time Object Detection</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.18.0/ort.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap');
+
+  :root {
+    --bg: #080b0f;
+    --surface: #0d1117;
+    --border: #1c2333;
+    --accent: #00ff88;
+    --accent2: #0088ff;
+    --accent3: #ff4466;
+    --text: #e6edf3;
+    --muted: #7d8590;
+    --card: #161b22;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,255,136,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,255,136,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  header {
+    position: relative;
+    z-index: 10;
+    padding: 20px 32px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    backdrop-filter: blur(12px);
+    background: rgba(8,11,15,0.8);
+    position: sticky;
+    top: 0;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+  }
+
+  .logo-icon {
+    width: 36px; height: 36px;
+    background: var(--accent);
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+
+  @keyframes pulse-glow {
+    0%,100% { box-shadow: 0 0 0 0 rgba(0,255,136,0.4); }
+    50% { box-shadow: 0 0 0 8px rgba(0,255,136,0); }
+  }
+
+  .logo-icon svg { color: #080b0f; }
+
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: background 0.3s;
+  }
+  .status-dot.ready { background: var(--accent); animation: pulse-glow 1.5s infinite; }
+  .status-dot.running { background: var(--accent2); }
+  .status-dot.error { background: var(--accent3); }
+
+  main {
+    position: relative;
+    z-index: 1;
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 32px;
+    display: grid;
+    grid-template-columns: 1fr 360px;
+    gap: 24px;
+  }
+
+  /* ── Left Column ── */
+  .detection-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .video-wrapper {
+    position: relative;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+    aspect-ratio: 16/9;
+  }
+
+  .video-wrapper::before {
+    content: 'LIVE';
+    position: absolute;
+    top: 16px; left: 16px;
+    z-index: 10;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 2px;
+    color: #080b0f;
+    background: var(--accent3);
+    padding: 4px 10px;
+    border-radius: 4px;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .video-wrapper.active::before { opacity: 1; }
+
+  .corner-tl, .corner-tr, .corner-bl, .corner-br {
+    position: absolute;
+    width: 20px; height: 20px;
+    z-index: 5;
+    opacity: 0.6;
+  }
+  .corner-tl { top: 8px; left: 8px; border-top: 2px solid var(--accent); border-left: 2px solid var(--accent); }
+  .corner-tr { top: 8px; right: 8px; border-top: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+  .corner-bl { bottom: 8px; left: 8px; border-bottom: 2px solid var(--accent); border-left: 2px solid var(--accent); }
+  .corner-br { bottom: 8px; right: 8px; border-bottom: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+
+  #videoEl {
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+    transform: scaleX(-1);
+  }
+
+  #canvasEl {
+    position: absolute;
+    inset: 0;
+    width: 100%; height: 100%;
+    transform: scaleX(-1);
+    pointer-events: none;
+  }
+
+  .video-placeholder {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    color: var(--muted);
+  }
+
+  .video-placeholder svg { opacity: 0.3; }
+  .video-placeholder p { font-family: 'JetBrains Mono', monospace; font-size: 13px; }
+
+  /* Controls */
+  .controls {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    flex: 1;
+    min-width: 140px;
+    padding: 14px 24px;
+    border: none;
+    border-radius: 10px;
+    font-family: 'Syne', sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #080b0f;
+  }
+  .btn-primary:hover { filter: brightness(1.1); transform: translateY(-1px); }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  .btn-secondary {
+    background: var(--card);
+    color: var(--text);
+    border: 1px solid var(--border);
+  }
+  .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
+  .btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .btn-danger {
+    background: var(--card);
+    color: var(--accent3);
+    border: 1px solid rgba(255,68,102,0.3);
+  }
+  .btn-danger:hover { background: rgba(255,68,102,0.1); }
+
+  /* Config row */
+  .config-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr 2fr;
+    gap: 12px;
+  }
+
+  .config-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+  }
+
+  .config-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 8px;
+  }
+
+  .config-card input[type=range] {
+    width: 100%;
+    -webkit-appearance: none;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    outline: none;
+    margin-top: 4px;
+  }
+  .config-card input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    box-shadow: 0 0 8px rgba(0,255,136,0.5);
+  }
+
+  .range-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 20px;
+    font-weight: 400;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+
+  .model-path-input {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+    margin-top: 4px;
+  }
+  .model-path-input:focus { border-color: var(--accent); }
+
+  /* ── Right Column ── */
+  .metrics-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .panel-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* Live metrics grid */
+  .metric-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .metric-card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    position: relative;
+    overflow: hidden;
+    transition: border-color 0.3s;
+  }
+  .metric-card:hover { border-color: rgba(0,255,136,0.3); }
+
+  .metric-card::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent), transparent);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.5s;
+  }
+  .metric-card.active::after { transform: scaleX(1); }
+
+  .metric-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .metric-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 22px;
+    font-weight: 400;
+    color: var(--text);
+    line-height: 1;
+  }
+
+  .metric-unit {
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .metric-card.highlight .metric-value { color: var(--accent); }
+  .metric-card.highlight2 .metric-value { color: var(--accent2); }
+
+  /* Session Summary */
+  .session-box {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+
+  .session-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+  }
+  .session-row:last-child { border-bottom: none; }
+  .session-row span:first-child { color: var(--muted); }
+  .session-row span:last-child { color: var(--text); }
+
+  /* Detection Log */
+  .detection-log {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    flex: 1;
+    min-height: 200px;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+
+  .detection-log::-webkit-scrollbar { width: 4px; }
+  .detection-log::-webkit-scrollbar-track { background: transparent; }
+  .detection-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .log-entry {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    animation: slide-in 0.2s ease;
+  }
+
+  @keyframes slide-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .log-class {
+    color: var(--accent);
+    font-weight: 500;
+  }
+
+  .log-conf {
+    color: var(--muted);
+  }
+
+  .log-time {
+    color: var(--accent2);
+    font-size: 10px;
+  }
+
+  .log-empty {
+    color: var(--muted);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    text-align: center;
+    padding: 20px 0;
+  }
+
+  /* Model info */
+  .model-info-box {
+    background: linear-gradient(135deg, rgba(0,255,136,0.05), rgba(0,136,255,0.05));
+    border: 1px solid rgba(0,255,136,0.2);
+    border-radius: 12px;
+    padding: 16px;
+  }
+
+  .model-info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 5px 0;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+  }
+  .model-info-row span:first-child { color: var(--muted); }
+  .model-info-row span:last-child { color: var(--accent); }
+
+  /* Loading overlay */
+  #loadingOverlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(8,11,15,0.95);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 20px;
+    backdrop-filter: blur(8px);
+    transition: opacity 0.5s;
+  }
+  #loadingOverlay.hidden { opacity: 0; pointer-events: none; }
+
+  .loading-spinner {
+    width: 56px; height: 56px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .loading-text {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px;
+    color: var(--muted);
+  }
+
+  .loading-sub {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: rgba(125,133,144,0.5);
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 20px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    z-index: 200;
+    transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+  .toast.success { border-color: rgba(0,255,136,0.4); }
+  .toast.error { border-color: rgba(255,68,102,0.4); }
+
+  /* FPS bar */
+  .fps-bar-container {
+    background: var(--surface);
+    border-radius: 4px;
+    height: 4px;
+    margin-top: 8px;
+    overflow: hidden;
+  }
+  .fps-bar {
+    height: 100%;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--accent3), var(--accent));
+    transition: width 0.3s;
+  }
+
+  /* Export btn */
+  .export-row {
+    display: flex;
+    gap: 10px;
+  }
+  .export-row .btn { font-size: 12px; padding: 10px 16px; }
+
+  @media (max-width: 1024px) {
+    main { grid-template-columns: 1fr; padding: 16px; }
+    .config-row { grid-template-columns: 1fr 1fr; }
+    header { padding: 16px; }
+  }
+
+  @media (max-width: 600px) {
+    .config-row { grid-template-columns: 1fr; }
+    .metric-grid { grid-template-columns: 1fr 1fr; }
+    header .logo span:last-child { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Loading Overlay -->
+<div id="loadingOverlay">
+  <div class="loading-spinner"></div>
+  <div class="loading-text" id="loadingText">Initializing ONNX Runtime…</div>
+  <div class="loading-sub" id="loadingSub">Preparing WebAssembly backend</div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <path d="M2 8l4-4 4 4M2 16l4 4 4-4M18 4l4 4-4 4M18 16l4-4-4-4"/>
+        <line x1="6" y1="4" x2="6" y2="20"/>
+        <line x1="18" y1="8" x2="18" y2="16"/>
+      </svg>
+    </div>
+    <span>YOLO<span style="color:var(--accent)">Vision</span></span>
+    <span style="color:var(--muted);font-size:12px;font-weight:400;margin-left:4px">/ Real-Time Detection</span>
+  </div>
+  <div class="status-bar">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Initializing</span>
+  </div>
+</header>
+
+<main>
+  <!-- Left: Detection -->
+  <div class="detection-panel">
+    <div class="video-wrapper" id="videoWrapper">
+      <div class="corner-tl"></div><div class="corner-tr"></div>
+      <div class="corner-bl"></div><div class="corner-br"></div>
+      <video id="videoEl" autoplay muted playsinline></video>
+      <canvas id="canvasEl"></canvas>
+      <div class="video-placeholder" id="placeholder">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
+        </svg>
+        <p>Camera feed will appear here</p>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="btn btn-primary" id="btnStart" disabled>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+        Start Detection
+      </button>
+      <button class="btn btn-secondary" id="btnStop" disabled>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+        Pause
+      </button>
+      <button class="btn btn-danger" id="btnReset">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 109-9M3 12V7m0 5H8"/></svg>
+        Reset Session
+      </button>
+    </div>
+
+    <div class="config-row">
+      <div class="config-card">
+        <div class="config-label">Confidence</div>
+        <div class="range-value" id="confVal">0.40</div>
+        <input type="range" id="confRange" min="0.1" max="0.95" step="0.05" value="0.4">
+      </div>
+      <div class="config-card">
+        <div class="config-label">IoU Threshold</div>
+        <div class="range-value" id="iouVal">0.45</div>
+        <input type="range" id="iouRange" min="0.1" max="0.9" step="0.05" value="0.45">
+      </div>
+      <div class="config-card" style="grid-column: span 1;">
+        <div class="config-label">ONNX Model Path (relative to repo root)</div>
+        <input type="text" class="model-path-input" id="modelPath" value="models/yolov8n.onnx" placeholder="models/yolov8n.onnx">
+      </div>
+    </div>
+  </div>
+
+  <!-- Right: Metrics -->
+  <div class="metrics-panel">
+
+    <!-- Live Metrics -->
+    <div>
+      <div class="panel-title">Live Metrics</div>
+    </div>
+    <div class="metric-grid">
+      <div class="metric-card highlight" id="cardFPS">
+        <div class="metric-label">FPS</div>
+        <div class="metric-value" id="metFPS">—</div>
+        <div class="metric-unit">frames/sec</div>
+        <div class="fps-bar-container"><div class="fps-bar" id="fpsBar" style="width:0%"></div></div>
+      </div>
+      <div class="metric-card" id="cardInf">
+        <div class="metric-label">Inference</div>
+        <div class="metric-value" id="metInf">—</div>
+        <div class="metric-unit">ms / frame</div>
+      </div>
+      <div class="metric-card highlight2" id="cardObj">
+        <div class="metric-label">Objects</div>
+        <div class="metric-value" id="metObj">0</div>
+        <div class="metric-unit">detected</div>
+      </div>
+      <div class="metric-card" id="cardConf">
+        <div class="metric-label">Avg Confidence</div>
+        <div class="metric-value" id="metConf">—</div>
+        <div class="metric-unit">score</div>
+      </div>
+    </div>
+
+    <!-- Model Info -->
+    <div>
+      <div class="panel-title" style="margin-top:4px">Model Info</div>
+    </div>
+    <div class="model-info-box" id="modelInfoBox">
+      <div class="model-info-row"><span>Status</span><span id="miStatus">Not Loaded</span></div>
+      <div class="model-info-row"><span>Input Shape</span><span id="miShape">—</span></div>
+      <div class="model-info-row"><span>Model Size</span><span id="miSize">—</span></div>
+      <div class="model-info-row"><span>Est. GFLOPs</span><span id="miGFLOP">—</span></div>
+      <div class="model-info-row"><span>Backend</span><span id="miBackend">WebAssembly</span></div>
+      <div class="model-info-row"><span>Classes</span><span id="miClasses">—</span></div>
+    </div>
+
+    <!-- Session Summary -->
+    <div>
+      <div class="panel-title">Session Summary</div>
+    </div>
+    <div class="session-box">
+      <div class="session-row"><span>Duration</span><span id="ssDuration">0s</span></div>
+      <div class="session-row"><span>Total Frames</span><span id="ssFrames">0</span></div>
+      <div class="session-row"><span>Avg FPS</span><span id="ssAvgFPS">—</span></div>
+      <div class="session-row"><span>Avg Inference</span><span id="ssAvgInf">—</span></div>
+      <div class="session-row"><span>Peak FPS</span><span id="ssPeakFPS">—</span></div>
+      <div class="session-row"><span>Total Objects</span><span id="ssTotalObj">0</span></div>
+      <div class="session-row"><span>Top Class</span><span id="ssTopClass">—</span></div>
+    </div>
+
+    <!-- Export -->
+    <div class="export-row">
+      <button class="btn btn-secondary" id="btnExport">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Export JSON
+      </button>
+      <button class="btn btn-secondary" id="btnLoadModel">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 9v10a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h10"/><polyline points="17,1 21,5 17,9"/><line x1="21" y1="5" x2="9" y2="5"/></svg>
+        Reload Model
+      </button>
+    </div>
+
+    <!-- Detection Log -->
+    <div>
+      <div class="panel-title">Detection Log</div>
+    </div>
+    <div class="detection-log" id="detectionLog">
+      <div class="log-empty">Detections will appear here…</div>
+    </div>
+
+  </div>
+</main>
+
+<script>
+// ─── COCO 80 Classes ───────────────────────────────────────────────────────
+const COCO_CLASSES = [
+  'person','bicycle','car','motorcycle','airplane','bus','train','truck','boat',
+  'traffic light','fire hydrant','stop sign','parking meter','bench','bird','cat',
+  'dog','horse','sheep','cow','elephant','bear','zebra','giraffe','backpack',
+  'umbrella','handbag','tie','suitcase','frisbee','skis','snowboard','sports ball',
+  'kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket',
+  'bottle','wine glass','cup','fork','knife','spoon','bowl','banana','apple',
+  'sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake','chair',
+  'couch','potted plant','bed','dining table','toilet','tv','laptop','mouse',
+  'remote','keyboard','cell phone','microwave','oven','toaster','sink',
+  'refrigerator','book','clock','vase','scissors','teddy bear','hair drier',
+  'toothbrush'
+];
+
+// Box colours per class (cycle through palette)
+const PALETTE = [
+  '#00ff88','#0088ff','#ff4466','#ffcc00','#aa44ff',
+  '#ff8800','#00ccff','#ff44aa','#88ff00','#ff6644'
+];
+const classColor = (i) => PALETTE[i % PALETTE.length];
+
+// ─── State ─────────────────────────────────────────────────────────────────
+let session = null;
+let stream = null;
+let animId = null;
+let running = false;
+let modelLoaded = false;
+
+let inputWidth = 640, inputHeight = 640;
+let modelSizeMB = 0;
+let gflops = 0;
+
+// Session metrics
+let sessionStart = null;
+let totalFrames = 0;
+let totalInfTime = 0;
+let totalObjects = 0;
+let peakFPS = 0;
+let classCounts = {};
+let fpsHistory = [];
+let lastFrameTime = performance.now();
+let fpsSmooth = 0;
+
+// ─── DOM ───────────────────────────────────────────────────────────────────
+const videoEl = document.getElementById('videoEl');
+const canvasEl = document.getElementById('canvasEl');
+const ctx = canvasEl.getContext('2d');
+const placeholder = document.getElementById('placeholder');
+const videoWrapper = document.getElementById('videoWrapper');
+const loadingOverlay = document.getElementById('loadingOverlay');
+const loadingText = document.getElementById('loadingText');
+const loadingSub = document.getElementById('loadingSub');
+const statusDot = document.getElementById('statusDot');
+const statusText = document.getElementById('statusText');
+
+// Controls
+const btnStart = document.getElementById('btnStart');
+const btnStop = document.getElementById('btnStop');
+const btnReset = document.getElementById('btnReset');
+const btnExport = document.getElementById('btnExport');
+const btnLoadModel = document.getElementById('btnLoadModel');
+const confRange = document.getElementById('confRange');
+const iouRange = document.getElementById('iouRange');
+const confVal = document.getElementById('confVal');
+const iouVal = document.getElementById('iouVal');
+const modelPathInput = document.getElementById('modelPath');
+
+// Metrics
+const metFPS = document.getElementById('metFPS');
+const metInf = document.getElementById('metInf');
+const metObj = document.getElementById('metObj');
+const metConf = document.getElementById('metConf');
+const fpsBar = document.getElementById('fpsBar');
+
+// Model info
+const miStatus = document.getElementById('miStatus');
+const miShape = document.getElementById('miShape');
+const miSize = document.getElementById('miSize');
+const miGFLOP = document.getElementById('miGFLOP');
+const miBackend = document.getElementById('miBackend');
+const miClasses = document.getElementById('miClasses');
+
+// Session
+const ssDuration = document.getElementById('ssDuration');
+const ssFrames = document.getElementById('ssFrames');
+const ssAvgFPS = document.getElementById('ssAvgFPS');
+const ssAvgInf = document.getElementById('ssAvgInf');
+const ssPeakFPS = document.getElementById('ssPeakFPS');
+const ssTotalObj = document.getElementById('ssTotalObj');
+const ssTopClass = document.getElementById('ssTopClass');
+
+const detectionLog = document.getElementById('detectionLog');
+
+// ─── Utilities ─────────────────────────────────────────────────────────────
+function setStatus(state, text) {
+  statusDot.className = 'status-dot ' + state;
+  statusText.textContent = text;
+}
+
+function showToast(msg, type = 'success') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast ' + type + ' show';
+  setTimeout(() => { t.className = 'toast'; }, 3500);
+}
+
+function hideLoading() {
+  loadingOverlay.classList.add('hidden');
+  setTimeout(() => loadingOverlay.style.display = 'none', 600);
+}
+
+function updateLoading(text, sub = '') {
+  loadingText.textContent = text;
+  loadingSub.textContent = sub;
+}
+
+// ─── ONNX Model Loading ────────────────────────────────────────────────────
+async function loadModel() {
+  const path = modelPathInput.value.trim() || 'models/yolov8n.onnx';
+  updateLoading('Loading ONNX model…', path);
+  miStatus.textContent = 'Loading…';
+  setStatus('', 'Loading model');
+
+  try {
+    // Fetch to get size
+    const res = await fetch(path);
+    if (!res.ok) throw new Error(`HTTP ${res.status} — file not found at: ${path}`);
+    const arrayBuffer = await res.arrayBuffer();
+    modelSizeMB = (arrayBuffer.byteLength / (1024 * 1024));
+
+    updateLoading('Creating inference session…', 'Compiling WebAssembly');
+    ort.env.wasm.numThreads = navigator.hardwareConcurrency > 4 ? 4 : 2;
+
+    session = await ort.InferenceSession.create(arrayBuffer, {
+      executionProviders: ['wasm'],
+      graphOptimizationLevel: 'all',
+    });
+
+    // Inspect input shape
+    const inputName = session.inputNames[0];
+    const inputMeta = session.inputMetadata ? session.inputMetadata[inputName] : null;
+
+    // Default / detect shape
+    inputWidth = 640; inputHeight = 640;
+    if (inputMeta && inputMeta.dims) {
+      const dims = inputMeta.dims;
+      inputHeight = dims[2] || 640;
+      inputWidth = dims[3] || 640;
+    }
+
+    // Estimate GFLOPs for common YOLO configs
+    gflops = estimateGFLOPs(inputWidth, inputHeight, modelSizeMB);
+
+    miStatus.textContent = 'Loaded ✓';
+    miShape.textContent = `1×3×${inputHeight}×${inputWidth}`;
+    miSize.textContent = modelSizeMB.toFixed(2) + ' MB';
+    miGFLOP.textContent = gflops.toFixed(2) + ' GFLOPs';
+    miClasses.textContent = COCO_CLASSES.length;
+
+    modelLoaded = true;
+    setStatus('ready', 'Model Ready');
+    btnStart.disabled = false;
+    showToast('Model loaded — ' + modelSizeMB.toFixed(1) + ' MB');
+
+  } catch (err) {
+    console.error(err);
+    miStatus.textContent = 'Error';
+    setStatus('error', 'Load Failed');
+    showToast('Model load failed: ' + err.message, 'error');
+  }
+}
+
+// Rough GFLOPs estimator based on model size heuristic
+function estimateGFLOPs(w, h, sizeMB) {
+  // Approximate: larger model = more params = more FLOPs
+  // Reference: YOLOv8n (6MB) ≈ 8.7 GFLOPs at 640×640
+  const baseGFLOPs = 8.7;
+  const baseMB = 6.0;
+  const scaleFactor = (w * h) / (640 * 640);
+  return (baseGFLOPs * (sizeMB / baseMB) * scaleFactor);
+}
+
+// ─── Camera ────────────────────────────────────────────────────────────────
+async function startCamera() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
+      audio: false
+    });
+    videoEl.srcObject = stream;
+    await new Promise(r => videoEl.onloadedmetadata = r);
+    await videoEl.play();
+    placeholder.style.display = 'none';
+    videoWrapper.classList.add('active');
+    return true;
+  } catch (err) {
+    showToast('Camera error: ' + err.message, 'error');
+    return false;
+  }
+}
+
+// ─── Preprocessing ─────────────────────────────────────────────────────────
+function preprocessFrame(video, w, h) {
+  const offscreen = document.createElement('canvas');
+  offscreen.width = w; offscreen.height = h;
+  const offCtx = offscreen.getContext('2d');
+  offCtx.drawImage(video, 0, 0, w, h);
+  const imageData = offCtx.getImageData(0, 0, w, h).data;
+
+  const float32 = new Float32Array(3 * w * h);
+  for (let i = 0; i < w * h; i++) {
+    float32[i] = imageData[i * 4] / 255.0;           // R
+    float32[w * h + i] = imageData[i * 4 + 1] / 255.0; // G
+    float32[2 * w * h + i] = imageData[i * 4 + 2] / 255.0; // B
+  }
+  return float32;
+}
+
+// ─── Non-Max Suppression ───────────────────────────────────────────────────
+function iou(a, b) {
+  const x1 = Math.max(a[0], b[0]), y1 = Math.max(a[1], b[1]);
+  const x2 = Math.min(a[2], b[2]), y2 = Math.min(a[3], b[3]);
+  const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  const ua = (a[2]-a[0])*(a[3]-a[1]) + (b[2]-b[0])*(b[3]-b[1]) - inter;
+  return inter / ua;
+}
+
+function nms(boxes, iouThresh) {
+  boxes.sort((a, b) => b[4] - a[4]);
+  const kept = [];
+  const removed = new Set();
+  for (let i = 0; i < boxes.length; i++) {
+    if (removed.has(i)) continue;
+    kept.push(boxes[i]);
+    for (let j = i + 1; j < boxes.length; j++) {
+      if (!removed.has(j) && iou(boxes[i], boxes[j]) > iouThresh) removed.add(j);
+    }
+  }
+  return kept;
+}
+
+// ─── Postprocessing ────────────────────────────────────────────────────────
+function postprocess(output, confThresh, iouThresh, origW, origH) {
+  // YOLOv8 output: [1, 84, 8400] (cx,cy,w,h + 80 class scores)
+  const data = output.data;
+  const dims = output.dims; // [1, num_channels, num_anchors]
+  const numChannels = dims[1];
+  const numAnchors = dims[2];
+
+  const boxes = [];
+
+  for (let i = 0; i < numAnchors; i++) {
+    // Find best class
+    let maxScore = 0, classId = 0;
+    for (let c = 4; c < numChannels; c++) {
+      const s = data[c * numAnchors + i];
+      if (s > maxScore) { maxScore = s; classId = c - 4; }
+    }
+    if (maxScore < confThresh) continue;
+
+    const cx = data[0 * numAnchors + i];
+    const cy = data[1 * numAnchors + i];
+    const bw = data[2 * numAnchors + i];
+    const bh = data[3 * numAnchors + i];
+
+    // Convert to corner format, scale to original
+    const x1 = (cx - bw / 2) / inputWidth  * origW;
+    const y1 = (cy - bh / 2) / inputHeight * origH;
+    const x2 = (cx + bw / 2) / inputWidth  * origW;
+    const y2 = (cy + bh / 2) / inputHeight * origH;
+
+    boxes.push([x1, y1, x2, y2, maxScore, classId]);
+  }
+
+  return nms(boxes, iouThresh);
+}
+
+// ─── Draw detections ───────────────────────────────────────────────────────
+function drawDetections(detections, canvasW, canvasH) {
+  ctx.clearRect(0, 0, canvasW, canvasH);
+
+  for (const [x1, y1, x2, y2, conf, classId] of detections) {
+    const label = COCO_CLASSES[classId] || `class_${classId}`;
+    const color = classColor(classId);
+
+    // Box
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = 8;
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    ctx.shadowBlur = 0;
+
+    // Corner accents
+    const cs = 10;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    [[x1,y1],[x2,y1],[x1,y2],[x2,y2]].forEach(([px,py], idx) => {
+      const sx = idx % 2 === 0 ? 1 : -1;
+      const sy = idx < 2 ? 1 : -1;
+      ctx.beginPath();
+      ctx.moveTo(px + sx * cs, py);
+      ctx.lineTo(px, py);
+      ctx.lineTo(px, py + sy * cs);
+      ctx.stroke();
+    });
+
+    // Label background
+    const text = `${label} ${(conf * 100).toFixed(0)}%`;
+    ctx.font = '600 12px JetBrains Mono, monospace';
+    const tw = ctx.measureText(text).width;
+    const lh = 20;
+    const lpad = 6;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(x1, y1 - lh - 4, tw + lpad * 2, lh, 4);
+    ctx.fill();
+
+    // Label text
+    ctx.fillStyle = '#080b0f';
+    ctx.fillText(text, x1 + lpad, y1 - 7);
+  }
+}
+
+// ─── Detection loop ────────────────────────────────────────────────────────
+async function detectionLoop() {
+  if (!running || !session) return;
+
+  const now = performance.now();
+  const delta = now - lastFrameTime;
+  lastFrameTime = now;
+
+  // Update FPS
+  const instFPS = 1000 / delta;
+  fpsSmooth = fpsSmooth * 0.8 + instFPS * 0.2;
+  peakFPS = Math.max(peakFPS, fpsSmooth);
+  fpsHistory.push(fpsSmooth);
+  if (fpsHistory.length > 300) fpsHistory.shift();
+
+  // Resize canvas
+  canvasEl.width = videoEl.clientWidth;
+  canvasEl.height = videoEl.clientHeight;
+
+  const confThresh = parseFloat(confRange.value);
+  const iouThresh  = parseFloat(iouRange.value);
+
+  // Preprocess
+  const float32 = preprocessFrame(videoEl, inputWidth, inputHeight);
+  const tensor = new ort.Tensor('float32', float32, [1, 3, inputHeight, inputWidth]);
+
+  // Inference
+  const t0 = performance.now();
+  let detections = [];
+  try {
+    const results = await session.run({ [session.inputNames[0]]: tensor });
+    const output = results[session.outputNames[0]];
+    detections = postprocess(output, confThresh, iouThresh, canvasEl.width, canvasEl.height);
+  } catch(e) {
+    console.warn('Inference error:', e);
+  }
+  const infTime = performance.now() - t0;
+
+  // Draw
+  drawDetections(detections, canvasEl.width, canvasEl.height);
+
+  // Update metrics
+  totalFrames++;
+  totalInfTime += infTime;
+  totalObjects += detections.length;
+
+  // Class counts
+  for (const [,,,,, cid] of detections) {
+    const name = COCO_CLASSES[cid] || `class_${cid}`;
+    classCounts[name] = (classCounts[name] || 0) + 1;
+  }
+
+  // Average confidence
+  const avgConf = detections.length
+    ? detections.reduce((s, d) => s + d[4], 0) / detections.length
+    : null;
+
+  // Live UI
+  metFPS.textContent = fpsSmooth.toFixed(1);
+  metInf.textContent = infTime.toFixed(1);
+  metObj.textContent = detections.length;
+  metConf.textContent = avgConf !== null ? avgConf.toFixed(2) : '—';
+  fpsBar.style.width = Math.min(fpsSmooth / 30 * 100, 100) + '%';
+
+  // Session UI
+  const elapsed = Math.floor((Date.now() - sessionStart) / 1000);
+  ssDuration.textContent = formatDuration(elapsed);
+  ssFrames.textContent = totalFrames;
+  ssAvgFPS.textContent = fpsHistory.length ? (fpsHistory.reduce((a,b)=>a+b,0)/fpsHistory.length).toFixed(1) : '—';
+  ssAvgInf.textContent = totalFrames ? (totalInfTime / totalFrames).toFixed(1) + 'ms' : '—';
+  ssPeakFPS.textContent = peakFPS.toFixed(1);
+  ssTotalObj.textContent = totalObjects;
+
+  const topClass = Object.entries(classCounts).sort((a,b)=>b[1]-a[1])[0];
+  ssTopClass.textContent = topClass ? topClass[0] : '—';
+
+  // Log new detections
+  if (detections.length > 0 && totalFrames % 5 === 0) {
+    addLogEntries(detections, infTime);
+  }
+
+  animId = requestAnimationFrame(detectionLoop);
+}
+
+function formatDuration(s) {
+  const m = Math.floor(s / 60), sec = s % 60;
+  return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+}
+
+function addLogEntries(detections, infTime) {
+  const now = new Date().toLocaleTimeString('en-US', {hour12: false});
+  if (detectionLog.querySelector('.log-empty')) detectionLog.innerHTML = '';
+
+  const unique = {};
+  for (const [,,,,conf, cid] of detections) {
+    const name = COCO_CLASSES[cid] || `class_${cid}`;
+    if (!unique[name] || conf > unique[name]) unique[name] = conf;
+  }
+
+  for (const [name, conf] of Object.entries(unique).slice(0,3)) {
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    entry.innerHTML = `
+      <span class="log-class">${name}</span>
+      <span class="log-conf">${(conf*100).toFixed(0)}%</span>
+      <span class="log-time">${now}</span>
+    `;
+    detectionLog.insertBefore(entry, detectionLog.firstChild);
+    if (detectionLog.children.length > 50) {
+      detectionLog.removeChild(detectionLog.lastChild);
+    }
+  }
+}
+
+// ─── Controls ──────────────────────────────────────────────────────────────
+btnStart.addEventListener('click', async () => {
+  if (!modelLoaded) { showToast('Model not loaded yet', 'error'); return; }
+
+  if (!stream) {
+    const ok = await startCamera();
+    if (!ok) return;
+  }
+
+  running = true;
+  sessionStart = sessionStart || Date.now();
+  lastFrameTime = performance.now();
+  setStatus('running', 'Running');
+  btnStart.disabled = true;
+  btnStop.disabled = false;
+  document.getElementById('cardFPS').classList.add('active');
+  document.getElementById('cardInf').classList.add('active');
+
+  detectionLoop();
+});
+
+btnStop.addEventListener('click', () => {
+  running = false;
+  if (animId) cancelAnimationFrame(animId);
+  setStatus('ready', 'Paused');
+  btnStart.disabled = false;
+  btnStop.disabled = true;
+  document.getElementById('cardFPS').classList.remove('active');
+});
+
+btnReset.addEventListener('click', () => {
+  running = false;
+  if (animId) cancelAnimationFrame(animId);
+  totalFrames = 0; totalInfTime = 0; totalObjects = 0;
+  peakFPS = 0; fpsHistory = []; classCounts = {};
+  sessionStart = null; fpsSmooth = 0;
+
+  metFPS.textContent = '—';
+  metInf.textContent = '—';
+  metObj.textContent = '0';
+  metConf.textContent = '—';
+  fpsBar.style.width = '0%';
+  ssDuration.textContent = '0s';
+  ssFrames.textContent = '0';
+  ssAvgFPS.textContent = '—';
+  ssAvgInf.textContent = '—';
+  ssPeakFPS.textContent = '—';
+  ssTotalObj.textContent = '0';
+  ssTopClass.textContent = '—';
+  detectionLog.innerHTML = '<div class="log-empty">Detections will appear here…</div>';
+  ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+
+  if (modelLoaded) {
+    setStatus('ready', 'Model Ready');
+    btnStart.disabled = false;
+  }
+  btnStop.disabled = true;
+  showToast('Session reset');
+});
+
+btnLoadModel.addEventListener('click', loadModel);
+
+btnExport.addEventListener('click', () => {
+  const report = {
+    timestamp: new Date().toISOString(),
+    model: {
+      path: modelPathInput.value,
+      sizeMB: modelSizeMB.toFixed(2),
+      estimatedGFLOPs: gflops.toFixed(2),
+      inputShape: `1x3x${inputHeight}x${inputWidth}`,
+      backend: 'WebAssembly (ONNX Runtime Web)',
+    },
+    session: {
+      durationSeconds: sessionStart ? Math.floor((Date.now() - sessionStart) / 1000) : 0,
+      totalFrames,
+      totalObjectsDetected: totalObjects,
+      averageFPS: fpsHistory.length ? +(fpsHistory.reduce((a,b)=>a+b,0)/fpsHistory.length).toFixed(2) : 0,
+      peakFPS: +peakFPS.toFixed(2),
+      averageInferenceMs: totalFrames ? +(totalInfTime / totalFrames).toFixed(2) : 0,
+    },
+    classCounts,
+  };
+  const blob = new Blob([JSON.stringify(report, null, 2)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `yolovision_session_${Date.now()}.json`;
+  a.click();
+  showToast('Session exported');
+});
+
+confRange.addEventListener('input', () => { confVal.textContent = parseFloat(confRange.value).toFixed(2); });
+iouRange.addEventListener('input',  () => { iouVal.textContent  = parseFloat(iouRange.value).toFixed(2); });
+
+// ─── Initialise ────────────────────────────────────────────────────────────
+(async () => {
+  updateLoading('Initializing ONNX Runtime…', 'Loading WebAssembly backend');
+  setStatus('', 'Initializing');
+
+  // Brief delay so ORT initialises
+  await new Promise(r => setTimeout(r, 800));
+
+  updateLoading('Setting up environment…', 'Configuring execution providers');
+  await new Promise(r => setTimeout(r, 400));
+
+  hideLoading();
+  setStatus('', 'Ready to load model');
+  showToast('Runtime ready — load your model to begin');
+
+  // Auto-load if path set
+  await loadModel();
+})();
+</script>
+</body>
+</html>
