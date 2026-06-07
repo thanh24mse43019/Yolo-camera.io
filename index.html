@@ -168,7 +168,6 @@
     position: absolute;
     inset: 0;
     width: 100%; height: 100%;
-    transform: scaleX(-1);
     pointer-events: none;
   }
 
@@ -907,6 +906,7 @@ async function loadModel() {
     miBackend.textContent = usedBackend === 'webgpu' ? '⚡ WebGPU' : 'WebAssembly';
     miBackend.style.color = usedBackend === 'webgpu' ? 'var(--accent2)' : 'var(--accent)';
 
+    reusableTensor = null; // reset so it's rebuilt for new model shape
     modelLoaded = true;
     setStatus('ready', 'Model Ready');
     btnStart.disabled = false;
@@ -950,20 +950,38 @@ async function startCamera() {
 }
 
 // ─── Preprocessing ─────────────────────────────────────────────────────────
-function preprocessFrame(video, w, h) {
-  const offscreen = document.createElement('canvas');
-  offscreen.width = w; offscreen.height = h;
-  const offCtx = offscreen.getContext('2d');
-  offCtx.drawImage(video, 0, 0, w, h);
-  const imageData = offCtx.getImageData(0, 0, w, h).data;
+// Persistent offscreen canvas — created once, reused every frame
+let offscreen = null, offCtx = null;
+let offW = 0, offH = 0;
+// Reusable typed arrays — allocated once per input size
+let pixelBuf = null, float32Buf = null;
 
-  const float32 = new Float32Array(3 * w * h);
-  for (let i = 0; i < w * h; i++) {
-    float32[i] = imageData[i * 4] / 255.0;           // R
-    float32[w * h + i] = imageData[i * 4 + 1] / 255.0; // G
-    float32[2 * w * h + i] = imageData[i * 4 + 2] / 255.0; // B
+function preprocessFrame(video, w, h) {
+  // Recreate only if size changed
+  if (!offscreen || offW !== w || offH !== h) {
+    offscreen = new OffscreenCanvas(w, h);
+    offCtx = offscreen.getContext('2d', { willReadFrequently: true });
+    offW = w; offH = h;
+    pixelBuf = new Uint8ClampedArray(w * h * 4);
+    float32Buf = new Float32Array(3 * w * h);
   }
-  return float32;
+  // Mirror horizontally to match the CSS-mirrored video element
+  offCtx.save();
+  offCtx.translate(w, 0);
+  offCtx.scale(-1, 1);
+  offCtx.drawImage(video, 0, 0, w, h);
+  offCtx.restore();
+
+  const imageData = offCtx.getImageData(0, 0, w, h);
+  const data = imageData.data;
+  const pixels = w * h;
+  for (let i = 0; i < pixels; i++) {
+    const src = i * 4;
+    float32Buf[i]           = data[src]     / 255.0; // R
+    float32Buf[pixels + i]  = data[src + 1] / 255.0; // G
+    float32Buf[pixels*2 + i]= data[src + 2] / 255.0; // B
+  }
+  return float32Buf;
 }
 
 // ─── Non-Max Suppression ───────────────────────────────────────────────────
@@ -1073,6 +1091,9 @@ function drawDetections(detections, canvasW, canvasH) {
 }
 
 // ─── Detection loop ────────────────────────────────────────────────────────
+// Reuse tensor object — avoid GC pressure each frame
+let reusableTensor = null;
+
 async function detectionLoop() {
   if (!running || !session) return;
 
@@ -1087,22 +1108,30 @@ async function detectionLoop() {
   fpsHistory.push(fpsSmooth);
   if (fpsHistory.length > 300) fpsHistory.shift();
 
-  // Resize canvas
-  canvasEl.width = videoEl.clientWidth;
-  canvasEl.height = videoEl.clientHeight;
+  // Resize canvas only when display size actually changes (avoids context reset every frame)
+  const cw = videoEl.clientWidth, ch = videoEl.clientHeight;
+  if (canvasEl.width !== cw || canvasEl.height !== ch) {
+    canvasEl.width = cw;
+    canvasEl.height = ch;
+  }
 
   const confThresh = parseFloat(confRange.value);
   const iouThresh  = parseFloat(iouRange.value);
 
-  // Preprocess
+  // Preprocess — reuses persistent offscreen canvas + typed arrays
   const float32 = preprocessFrame(videoEl, inputWidth, inputHeight);
-  const tensor = new ort.Tensor('float32', float32, [1, 3, inputHeight, inputWidth]);
+
+  // Reuse tensor dims to avoid re-allocating the wrapper each frame
+  if (!reusableTensor) {
+    reusableTensor = new ort.Tensor('float32', float32, [1, 3, inputHeight, inputWidth]);
+  }
+  // float32Buf is already updated in-place by preprocessFrame, tensor.data points to it
 
   // Inference
   const t0 = performance.now();
   let detections = [];
   try {
-    const results = await session.run({ [session.inputNames[0]]: tensor });
+    const results = await session.run({ [session.inputNames[0]]: reusableTensor });
     const output = results[session.outputNames[0]];
     detections = postprocess(output, confThresh, iouThresh, canvasEl.width, canvasEl.height);
   } catch(e) {
