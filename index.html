@@ -3,25 +3,24 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>YOLO Vision — Real-Time Object Detection</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.18.0/ort.min.js"></script>
+<title>YOLO Vision — Real-time Detection</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne+Mono&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap');
-
   :root {
-    --bg: #080b0f;
-    --surface: #0d1117;
-    --border: #1c2333;
-    --accent: #00ff88;
-    --accent2: #0088ff;
-    --accent3: #ff4466;
-    --text: #e6edf3;
-    --muted: #7d8590;
-    --card: #161b22;
+    --bg: #090c10;
+    --panel: #0e1318;
+    --border: #1e2a36;
+    --accent: #00f5a0;
+    --accent2: #00b4d8;
+    --warn: #ff6b35;
+    --text: #c8d8e8;
+    --muted: #4a6070;
+    --card: #111820;
+    --glow: 0 0 20px rgba(0,245,160,0.15);
   }
-
+ 
   * { box-sizing: border-box; margin: 0; padding: 0; }
-
+ 
   body {
     background: var(--bg);
     color: var(--text);
@@ -29,1303 +28,834 @@
     min-height: 100vh;
     overflow-x: hidden;
   }
-
-  /* Grid background */
+ 
+  /* Grid noise overlay */
   body::before {
     content: '';
-    position: fixed;
-    inset: 0;
+    position: fixed; inset: 0;
     background-image:
-      linear-gradient(rgba(0,255,136,0.03) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0,255,136,0.03) 1px, transparent 1px);
+      linear-gradient(rgba(0,245,160,0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,245,160,0.02) 1px, transparent 1px);
     background-size: 40px 40px;
     pointer-events: none;
     z-index: 0;
   }
-
+ 
   header {
-    position: relative;
-    z-index: 10;
-    padding: 20px 32px;
-    border-bottom: 1px solid var(--border);
     display: flex;
     align-items: center;
     justify-content: space-between;
-    backdrop-filter: blur(12px);
-    background: rgba(8,11,15,0.8);
-    position: sticky;
-    top: 0;
+    padding: 18px 32px;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    z-index: 10;
+    backdrop-filter: blur(6px);
   }
-
+ 
   .logo {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-size: 20px;
+    font-size: 1.3rem;
     font-weight: 800;
-    letter-spacing: -0.5px;
+    letter-spacing: -0.02em;
+    color: #fff;
   }
-
-  .logo-icon {
-    width: 36px; height: 36px;
-    background: var(--accent);
-    border-radius: 8px;
-    display: grid;
-    place-items: center;
-    animation: pulse-glow 2s ease-in-out infinite;
-  }
-
-  @keyframes pulse-glow {
-    0%,100% { box-shadow: 0 0 0 0 rgba(0,255,136,0.4); }
-    50% { box-shadow: 0 0 0 8px rgba(0,255,136,0); }
-  }
-
-  .logo-icon svg { color: #080b0f; }
-
+  .logo span { color: var(--accent); }
+ 
   .status-bar {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
+    font-family: 'Syne Mono', monospace;
+    font-size: 0.75rem;
     color: var(--muted);
   }
-
-  .status-dot {
+  .dot {
     width: 8px; height: 8px;
     border-radius: 50%;
     background: var(--muted);
-    transition: background 0.3s;
+    transition: background 0.3s, box-shadow 0.3s;
   }
-  .status-dot.ready { background: var(--accent); animation: pulse-glow 1.5s infinite; }
-  .status-dot.running { background: var(--accent2); }
-  .status-dot.error { background: var(--accent3); }
-
-  main {
+  .dot.live { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .dot.error { background: var(--warn); box-shadow: 0 0 8px var(--warn); }
+ 
+  .main {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 0;
+    height: calc(100vh - 61px);
     position: relative;
     z-index: 1;
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: 32px;
-    display: grid;
-    grid-template-columns: 1fr 360px;
-    gap: 24px;
   }
-
-  /* ── Left Column ── */
-  .detection-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-  }
-
-  .video-wrapper {
+ 
+  /* ── Video Panel ── */
+  .video-panel {
     position: relative;
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 16px;
+    background: #000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     overflow: hidden;
-    aspect-ratio: 16/9;
   }
-
-  .video-wrapper::before {
-    content: 'LIVE';
-    position: absolute;
-    top: 16px; left: 16px;
-    z-index: 10;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 2px;
-    color: #080b0f;
-    background: var(--accent3);
-    padding: 4px 10px;
-    border-radius: 4px;
-    opacity: 0;
-    transition: opacity 0.3s;
-  }
-  .video-wrapper.active::before { opacity: 1; }
-
-  .corner-tl, .corner-tr, .corner-bl, .corner-br {
-    position: absolute;
-    width: 20px; height: 20px;
-    z-index: 5;
-    opacity: 0.6;
-  }
-  .corner-tl { top: 8px; left: 8px; border-top: 2px solid var(--accent); border-left: 2px solid var(--accent); }
-  .corner-tr { top: 8px; right: 8px; border-top: 2px solid var(--accent); border-right: 2px solid var(--accent); }
-  .corner-bl { bottom: 8px; left: 8px; border-bottom: 2px solid var(--accent); border-left: 2px solid var(--accent); }
-  .corner-br { bottom: 8px; right: 8px; border-bottom: 2px solid var(--accent); border-right: 2px solid var(--accent); }
-
+ 
   #videoEl {
     width: 100%; height: 100%;
-    object-fit: cover;
-    display: block;
-    transform: scaleX(-1);
+    object-fit: contain;
+    display: none;
   }
-
-  #canvasEl {
-    position: absolute;
-    inset: 0;
-    width: 100%; height: 100%;
+ 
+  #canvasOverlay {
+    position: absolute; inset: 0;
     pointer-events: none;
   }
-
+ 
   .video-placeholder {
-    position: absolute;
-    inset: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
     gap: 16px;
     color: var(--muted);
   }
-
   .video-placeholder svg { opacity: 0.3; }
-  .video-placeholder p { font-family: 'JetBrains Mono', monospace; font-size: 13px; }
-
-  /* Controls */
-  .controls {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
+  .video-placeholder p { font-size: 0.9rem; }
+ 
+  /* Corner brackets */
+  .corner {
+    position: absolute;
+    width: 28px; height: 28px;
+    border-color: var(--accent);
+    border-style: solid;
+    opacity: 0.5;
   }
-
-  .btn {
-    flex: 1;
-    min-width: 140px;
-    padding: 14px 24px;
-    border: none;
-    border-radius: 10px;
-    font-family: 'Syne', sans-serif;
-    font-size: 14px;
-    font-weight: 700;
-    letter-spacing: 0.3px;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
+  .corner.tl { top: 16px; left: 16px; border-width: 2px 0 0 2px; }
+  .corner.tr { top: 16px; right: 16px; border-width: 2px 2px 0 0; }
+  .corner.bl { bottom: 16px; left: 16px; border-width: 0 0 2px 2px; }
+  .corner.br { bottom: 16px; right: 16px; border-width: 0 2px 2px 0; }
+ 
+  /* Scan line animation */
+  .scanline {
+    position: absolute;
+    left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    opacity: 0;
+    pointer-events: none;
+    animation: scan 3s ease-in-out infinite;
   }
-
-  .btn-primary {
-    background: var(--accent);
-    color: #080b0f;
+  @keyframes scan {
+    0%   { top: 0%;  opacity: 0; }
+    10%  { opacity: 0.4; }
+    90%  { opacity: 0.4; }
+    100% { top: 100%; opacity: 0; }
   }
-  .btn-primary:hover { filter: brightness(1.1); transform: translateY(-1px); }
-  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
-
-  .btn-secondary {
-    background: var(--card);
-    color: var(--text);
-    border: 1px solid var(--border);
-  }
-  .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
-  .btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  .btn-danger {
-    background: var(--card);
-    color: var(--accent3);
-    border: 1px solid rgba(255,68,102,0.3);
-  }
-  .btn-danger:hover { background: rgba(255,68,102,0.1); }
-
-  /* Config row */
-  .config-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr 2fr;
-    gap: 12px;
-  }
-
-  .config-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 16px;
-  }
-
-  .config-label {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 1.5px;
-    color: var(--muted);
-    text-transform: uppercase;
-    margin-bottom: 8px;
-  }
-
-  .config-card input[type=range] {
-    width: 100%;
-    -webkit-appearance: none;
-    height: 4px;
-    background: var(--border);
-    border-radius: 2px;
-    outline: none;
-    margin-top: 4px;
-  }
-  .config-card input[type=range]::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    width: 16px; height: 16px;
-    border-radius: 50%;
-    background: var(--accent);
-    cursor: pointer;
-    box-shadow: 0 0 8px rgba(0,255,136,0.5);
-  }
-
-  .range-value {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 20px;
-    font-weight: 400;
-    color: var(--accent);
-    margin-bottom: 4px;
-  }
-
-  .model-path-input {
-    width: 100%;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 12px;
-    color: var(--text);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    outline: none;
-    transition: border-color 0.2s;
-    margin-top: 4px;
-  }
-  .model-path-input:focus { border-color: var(--accent); }
-
-  /* ── Right Column ── */
-  .metrics-panel {
+ 
+  /* ── Sidebar ── */
+  .sidebar {
+    background: var(--panel);
+    border-left: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    overflow-y: auto;
   }
-
-  .panel-title {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: var(--muted);
-    font-family: 'JetBrains Mono', monospace;
-    padding-bottom: 12px;
+ 
+  .sidebar-section {
+    padding: 20px;
     border-bottom: 1px solid var(--border);
   }
-
-  /* Live metrics grid */
-  .metric-grid {
+ 
+  .section-label {
+    font-size: 0.65rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 14px;
+    font-family: 'Syne Mono', monospace;
+  }
+ 
+  /* ── Metrics Grid ── */
+  .metrics-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 10px;
   }
-
+ 
   .metric-card {
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 16px;
+    border-radius: 8px;
+    padding: 12px;
     position: relative;
     overflow: hidden;
     transition: border-color 0.3s;
   }
-  .metric-card:hover { border-color: rgba(0,255,136,0.3); }
-
-  .metric-card::after {
+  .metric-card::before {
     content: '';
     position: absolute;
-    bottom: 0; left: 0; right: 0;
+    top: 0; left: 0; right: 0;
     height: 2px;
-    background: linear-gradient(90deg, var(--accent), transparent);
+    background: var(--accent);
     transform: scaleX(0);
     transform-origin: left;
-    transition: transform 0.5s;
+    transition: transform 0.4s ease;
   }
-  .metric-card.active::after { transform: scaleX(1); }
-
+  .metric-card.updated::before { transform: scaleX(1); }
+ 
   .metric-label {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 9px;
-    letter-spacing: 1.5px;
-    color: var(--muted);
+    font-size: 0.6rem;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
+    color: var(--muted);
+    font-family: 'Syne Mono', monospace;
     margin-bottom: 6px;
   }
-
   .metric-value {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 22px;
-    font-weight: 400;
-    color: var(--text);
-    line-height: 1;
-  }
-
-  .metric-unit {
-    font-size: 11px;
-    color: var(--muted);
-    margin-top: 4px;
-    font-family: 'JetBrains Mono', monospace;
-  }
-
-  .metric-card.highlight .metric-value { color: var(--accent); }
-  .metric-card.highlight2 .metric-value { color: var(--accent2); }
-
-  /* Session Summary */
-  .session-box {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 20px;
-  }
-
-  .session-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 8px 0;
-    border-bottom: 1px solid rgba(255,255,255,0.04);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-  }
-  .session-row:last-child { border-bottom: none; }
-  .session-row span:first-child { color: var(--muted); }
-  .session-row span:last-child { color: var(--text); }
-
-  /* Detection Log */
-  .detection-log {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    padding: 16px;
-    flex: 1;
-    min-height: 200px;
-    max-height: 300px;
-    overflow-y: auto;
-  }
-
-  .detection-log::-webkit-scrollbar { width: 4px; }
-  .detection-log::-webkit-scrollbar-track { background: transparent; }
-  .detection-log::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-
-  .log-entry {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 6px 0;
-    border-bottom: 1px solid rgba(255,255,255,0.04);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    animation: slide-in 0.2s ease;
-  }
-
-  @keyframes slide-in {
-    from { opacity: 0; transform: translateY(-4px); }
-    to { opacity: 1; transform: translateY(0); }
-  }
-
-  .log-class {
+    font-size: 1.4rem;
+    font-weight: 800;
     color: var(--accent);
-    font-weight: 500;
+    line-height: 1;
+    font-family: 'Syne Mono', monospace;
+    transition: color 0.3s;
   }
-
-  .log-conf {
+  .metric-unit {
+    font-size: 0.65rem;
     color: var(--muted);
+    margin-top: 2px;
+    font-family: 'Syne Mono', monospace;
   }
-
-  .log-time {
-    color: var(--accent2);
-    font-size: 10px;
+ 
+  /* FPS color thresholds */
+  .metric-value.good  { color: var(--accent); }
+  .metric-value.mid   { color: #f0c040; }
+  .metric-value.bad   { color: var(--warn); }
+ 
+  /* ── FPS Sparkline ── */
+  #sparkline {
+    width: 100%;
+    height: 48px;
+    margin-top: 8px;
   }
-
-  .log-empty {
-    color: var(--muted);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    text-align: center;
-    padding: 20px 0;
-  }
-
-  /* Model info */
-  .model-info-box {
-    background: linear-gradient(135deg, rgba(0,255,136,0.05), rgba(0,136,255,0.05));
-    border: 1px solid rgba(0,255,136,0.2);
-    border-radius: 12px;
-    padding: 16px;
-  }
-
-  .model-info-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 5px 0;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-  }
-  .model-info-row span:first-child { color: var(--muted); }
-  .model-info-row span:last-child { color: var(--accent); }
-
-  /* Loading overlay */
-  #loadingOverlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(8,11,15,0.95);
-    z-index: 100;
+ 
+  /* ── Detection Log ── */
+  .detection-list {
     display: flex;
     flex-direction: column;
+    gap: 6px;
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  .detection-list::-webkit-scrollbar { width: 4px; }
+  .detection-list::-webkit-scrollbar-track { background: transparent; }
+  .detection-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+ 
+  .det-item {
+    display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 20px;
-    backdrop-filter: blur(8px);
-    transition: opacity 0.5s;
+    justify-content: space-between;
+    padding: 8px 10px;
+    background: var(--card);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    font-size: 0.8rem;
+    animation: fadeIn 0.2s ease;
   }
-  #loadingOverlay.hidden { opacity: 0; pointer-events: none; }
-
-  .loading-spinner {
-    width: 56px; height: 56px;
-    border: 2px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+ 
+  .det-label { color: #fff; font-weight: 700; }
+  .det-conf {
+    font-family: 'Syne Mono', monospace;
+    font-size: 0.72rem;
+    color: var(--accent);
   }
-
-  @keyframes spin { to { transform: rotate(360deg); } }
-
-  .loading-text {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 14px;
+  .det-count {
+    background: var(--accent);
+    color: #000;
+    font-size: 0.6rem;
+    font-weight: 800;
+    padding: 2px 6px;
+    border-radius: 20px;
+    margin-left: 6px;
+  }
+ 
+  .no-detections {
     color: var(--muted);
+    font-size: 0.8rem;
+    font-family: 'Syne Mono', monospace;
+    padding: 12px 0;
+    text-align: center;
   }
-
-  .loading-sub {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    color: rgba(125,133,144,0.5);
+ 
+  /* ── Model Info ── */
+  .model-info {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
-
-  /* Toast */
-  .toast {
-    position: fixed;
-    bottom: 24px;
-    left: 50%;
-    transform: translateX(-50%) translateY(80px);
+  .info-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.78rem;
+  }
+  .info-key { color: var(--muted); font-family: 'Syne Mono', monospace; font-size: 0.7rem; }
+  .info-val { color: var(--text); font-weight: 700; }
+ 
+  /* ── Controls ── */
+  .controls {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 20px;
+  }
+ 
+  .server-input-row {
+    display: flex;
+    gap: 8px;
+  }
+ 
+  input[type="text"] {
+    flex: 1;
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 12px 20px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    z-index: 200;
-    transition: transform 0.3s cubic-bezier(0.34,1.56,0.64,1);
-    display: flex;
-    align-items: center;
-    gap: 10px;
+    color: var(--text);
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-family: 'Syne Mono', monospace;
+    font-size: 0.75rem;
+    outline: none;
+    transition: border-color 0.2s;
   }
-  .toast.show { transform: translateX(-50%) translateY(0); }
-  .toast.success { border-color: rgba(0,255,136,0.4); }
-  .toast.error { border-color: rgba(255,68,102,0.4); }
-
-  /* FPS bar */
-  .fps-bar-container {
-    background: var(--surface);
-    border-radius: 4px;
-    height: 4px;
-    margin-top: 8px;
+  input[type="text"]:focus { border-color: var(--accent); }
+ 
+  label.ctrl-label {
+    font-size: 0.65rem;
+    color: var(--muted);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-family: 'Syne Mono', monospace;
+    margin-bottom: 4px;
+    display: block;
+  }
+ 
+  button {
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: 6px;
+    font-family: 'Syne', sans-serif;
+    font-weight: 800;
+    font-size: 0.85rem;
+    letter-spacing: 0.06em;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
     overflow: hidden;
   }
-  .fps-bar {
-    height: 100%;
-    border-radius: 4px;
-    background: linear-gradient(90deg, var(--accent3), var(--accent));
-    transition: width 0.3s;
+  .btn-primary {
+    background: var(--accent);
+    color: #000;
   }
-
-  /* Export btn */
-  .export-row {
+  .btn-primary:hover { background: #00e090; box-shadow: 0 0 20px rgba(0,245,160,0.35); }
+  .btn-secondary {
+    background: transparent;
+    color: var(--warn);
+    border: 1px solid var(--warn);
+  }
+  .btn-secondary:hover { background: rgba(255,107,53,0.1); }
+  .btn-secondary:disabled { opacity: 0.3; cursor: not-allowed; }
+ 
+  /* Confidence slider */
+  input[type="range"] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    outline: none;
+    margin: 6px 0;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    background: var(--accent);
+    cursor: pointer;
+    box-shadow: 0 0 6px var(--accent);
+  }
+ 
+  .slider-row {
     display: flex;
-    gap: 10px;
+    justify-content: space-between;
+    font-size: 0.7rem;
+    color: var(--muted);
+    font-family: 'Syne Mono', monospace;
+    margin-top: 2px;
   }
-  .export-row .btn { font-size: 12px; padding: 10px 16px; }
-
-  @media (max-width: 1024px) {
-    main { grid-template-columns: 1fr; padding: 16px; }
-    .config-row { grid-template-columns: 1fr 1fr; }
-    header { padding: 16px; }
+ 
+  /* Error toast */
+  #errorToast {
+    position: fixed;
+    bottom: 24px; left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: var(--warn);
+    color: #fff;
+    padding: 10px 20px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-family: 'Syne Mono', monospace;
+    z-index: 100;
+    transition: transform 0.3s ease;
+    pointer-events: none;
   }
-
-  @media (max-width: 600px) {
-    .config-row { grid-template-columns: 1fr; }
-    .metric-grid { grid-template-columns: 1fr 1fr; }
-    header .logo span:last-child { display: none; }
+  #errorToast.show { transform: translateX(-50%) translateY(0); }
+ 
+  /* Log section */
+  #logBox {
+    font-family: 'Syne Mono', monospace;
+    font-size: 0.68rem;
+    color: var(--muted);
+    line-height: 1.7;
+    max-height: 120px;
+    overflow-y: auto;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+  }
+  #logBox::-webkit-scrollbar { width: 3px; }
+  #logBox::-webkit-scrollbar-thumb { background: var(--border); }
+  .log-ok  { color: var(--accent); }
+  .log-err { color: var(--warn); }
+  .log-info { color: var(--accent2); }
+ 
+  @media (max-width: 900px) {
+    .main { grid-template-columns: 1fr; grid-template-rows: 50vh 1fr; }
+    .sidebar { border-left: none; border-top: 1px solid var(--border); }
   }
 </style>
 </head>
 <body>
-
-<!-- Loading Overlay -->
-<div id="loadingOverlay">
-  <div class="loading-spinner"></div>
-  <div class="loading-text" id="loadingText">Initializing ONNX Runtime…</div>
-  <div class="loading-sub" id="loadingSub">Preparing WebAssembly backend</div>
-</div>
-
-<!-- Toast -->
-<div class="toast" id="toast"></div>
-
+ 
 <header>
-  <div class="logo">
-    <div class="logo-icon">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-        <path d="M2 8l4-4 4 4M2 16l4 4 4-4M18 4l4 4-4 4M18 16l4-4-4-4"/>
-        <line x1="6" y1="4" x2="6" y2="20"/>
-        <line x1="18" y1="8" x2="18" y2="16"/>
-      </svg>
-    </div>
-    <span>YOLO<span style="color:var(--accent)">Vision</span></span>
-    <span style="color:var(--muted);font-size:12px;font-weight:400;margin-left:4px">/ Real-Time Detection</span>
-  </div>
+  <div class="logo">YOLO<span>Vision</span></div>
   <div class="status-bar">
-    <div class="status-dot" id="statusDot"></div>
-    <span id="statusText">Initializing</span>
+    <div class="dot" id="connDot"></div>
+    <span id="connLabel">DISCONNECTED</span>
   </div>
 </header>
-
-<main>
-  <!-- Left: Detection -->
-  <div class="detection-panel">
-    <div class="video-wrapper" id="videoWrapper">
-      <div class="corner-tl"></div><div class="corner-tr"></div>
-      <div class="corner-bl"></div><div class="corner-br"></div>
-      <video id="videoEl" autoplay muted playsinline></video>
-      <canvas id="canvasEl"></canvas>
-      <div class="video-placeholder" id="placeholder">
-        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M15 10l4.553-2.276A1 1 0 0121 8.723v6.554a1 1 0 01-1.447.894L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z"/>
-        </svg>
-        <p>Camera feed will appear here</p>
-      </div>
-    </div>
-
-    <div class="controls">
-      <button class="btn btn-primary" id="btnStart" disabled>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
-        Start Detection
-      </button>
-      <button class="btn btn-secondary" id="btnStop" disabled>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-        Pause
-      </button>
-      <button class="btn btn-danger" id="btnReset">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 109-9M3 12V7m0 5H8"/></svg>
-        Reset Session
-      </button>
-    </div>
-
-    <div class="config-row">
-      <div class="config-card">
-        <div class="config-label">Confidence</div>
-        <div class="range-value" id="confVal">0.40</div>
-        <input type="range" id="confRange" min="0.1" max="0.95" step="0.05" value="0.4">
-      </div>
-      <div class="config-card">
-        <div class="config-label">IoU Threshold</div>
-        <div class="range-value" id="iouVal">0.45</div>
-        <input type="range" id="iouRange" min="0.1" max="0.9" step="0.05" value="0.45">
-      </div>
-      <div class="config-card" style="grid-column: span 1;">
-        <div class="config-label">ONNX Model Path (relative to repo root)</div>
-        <input type="text" class="model-path-input" id="modelPath" value="models/yolo26n.onnx" placeholder="models/yolo26n.onnx">
-      </div>
+ 
+<div class="main">
+ 
+  <!-- Video Panel -->
+  <div class="video-panel" id="videoPanel">
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+    <div class="scanline" id="scanline"></div>
+ 
+    <video id="videoEl" autoplay muted playsinline></video>
+    <canvas id="canvasOverlay"></canvas>
+ 
+    <div class="video-placeholder" id="placeholder">
+      <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1">
+        <rect x="2" y="5" width="20" height="14" rx="2"/>
+        <circle cx="12" cy="12" r="3"/>
+        <path d="M17 5l2-2M7 5L5 3"/>
+      </svg>
+      <p>Start camera to begin detection</p>
     </div>
   </div>
-
-  <!-- Right: Metrics -->
-  <div class="metrics-panel">
-
-    <!-- Live Metrics -->
-    <div>
-      <div class="panel-title">Live Metrics</div>
+ 
+  <!-- Sidebar -->
+  <div class="sidebar">
+ 
+    <!-- Metrics -->
+    <div class="sidebar-section">
+      <div class="section-label">Performance</div>
+      <div class="metrics-grid">
+        <div class="metric-card" id="fpsMC">
+          <div class="metric-label">FPS</div>
+          <div class="metric-value good" id="fpsVal">—</div>
+          <div class="metric-unit">frames/sec</div>
+        </div>
+        <div class="metric-card" id="msMC">
+          <div class="metric-label">Latency</div>
+          <div class="metric-value" id="msVal">—</div>
+          <div class="metric-unit">ms round-trip</div>
+        </div>
+        <div class="metric-card" id="gflopsMC">
+          <div class="metric-label">Model GFLOPs</div>
+          <div class="metric-value" id="gflopsVal">—</div>
+          <div class="metric-unit">GFLOPs</div>
+        </div>
+        <div class="metric-card" id="countMC">
+          <div class="metric-label">Objects</div>
+          <div class="metric-value" id="countVal">0</div>
+          <div class="metric-unit">detected</div>
+        </div>
+      </div>
+      <svg id="sparkline" xmlns="http://www.w3.org/2000/svg">
+        <polyline id="sparkPoly" fill="none" stroke="#00f5a0" stroke-width="1.5" opacity="0.6"/>
+        <line x1="0" y1="32" x2="9999" y2="32" stroke="#1e2a36" stroke-width="1"/>
+      </svg>
     </div>
-    <div class="metric-grid">
-      <div class="metric-card highlight" id="cardFPS">
-        <div class="metric-label">FPS</div>
-        <div class="metric-value" id="metFPS">—</div>
-        <div class="metric-unit">frames/sec</div>
-        <div class="fps-bar-container"><div class="fps-bar" id="fpsBar" style="width:0%"></div></div>
-      </div>
-      <div class="metric-card" id="cardInf">
-        <div class="metric-label">Inference</div>
-        <div class="metric-value" id="metInf">—</div>
-        <div class="metric-unit">ms / frame</div>
-      </div>
-      <div class="metric-card highlight2" id="cardObj">
-        <div class="metric-label">Objects</div>
-        <div class="metric-value" id="metObj">0</div>
-        <div class="metric-unit">detected</div>
-      </div>
-      <div class="metric-card" id="cardConf">
-        <div class="metric-label">Avg Confidence</div>
-        <div class="metric-value" id="metConf">—</div>
-        <div class="metric-unit">score</div>
+ 
+    <!-- Detections -->
+    <div class="sidebar-section">
+      <div class="section-label">Detections</div>
+      <div class="detection-list" id="detectionList">
+        <div class="no-detections">Awaiting inference…</div>
       </div>
     </div>
-
+ 
     <!-- Model Info -->
-    <div>
-      <div class="panel-title" style="margin-top:4px">Model Info</div>
+    <div class="sidebar-section">
+      <div class="section-label">Model</div>
+      <div class="model-info" id="modelInfo">
+        <div class="info-row">
+          <span class="info-key">name</span>
+          <span class="info-val" id="mName">—</span>
+        </div>
+        <div class="info-row">
+          <span class="info-key">params</span>
+          <span class="info-val" id="mParams">—</span>
+        </div>
+        <div class="info-row">
+          <span class="info-key">device</span>
+          <span class="info-val" id="mDevice">—</span>
+        </div>
+        <div class="info-row">
+          <span class="info-key">input size</span>
+          <span class="info-val" id="mImgsz">—</span>
+        </div>
+      </div>
     </div>
-    <div class="model-info-box" id="modelInfoBox">
-      <div class="model-info-row"><span>Status</span><span id="miStatus">Not Loaded</span></div>
-      <div class="model-info-row"><span>Input Shape</span><span id="miShape">—</span></div>
-      <div class="model-info-row"><span>Model Size</span><span id="miSize">—</span></div>
-      <div class="model-info-row"><span>Est. GFLOPs</span><span id="miGFLOP">—</span></div>
-      <div class="model-info-row"><span>Backend</span><span id="miBackend">Detecting…</span></div>
-      <div class="model-info-row"><span>Classes</span><span id="miClasses">—</span></div>
+ 
+    <!-- Controls -->
+    <div class="controls">
+      <div>
+        <label class="ctrl-label">Backend Server URL</label>
+        <input type="text" id="serverUrl" value="http://localhost:8000" placeholder="http://your-server:8000"/>
+      </div>
+      <div>
+        <label class="ctrl-label">Confidence threshold: <span id="confDisp">0.40</span></label>
+        <input type="range" id="confSlider" min="0.1" max="0.95" step="0.05" value="0.40"/>
+        <div class="slider-row"><span>0.1</span><span>0.95</span></div>
+      </div>
+      <button class="btn-primary" id="startBtn" onclick="startCamera()">▶ Start Camera</button>
+      <button class="btn-secondary" id="stopBtn" onclick="stopCamera()" disabled>■ Stop</button>
     </div>
-
-    <!-- Session Summary -->
-    <div>
-      <div class="panel-title">Session Summary</div>
+ 
+    <!-- Log -->
+    <div class="sidebar-section" style="flex:1">
+      <div class="section-label">Log</div>
+      <div id="logBox"><span class="log-info">Ready. Set server URL and start camera.</span></div>
     </div>
-    <div class="session-box">
-      <div class="session-row"><span>Duration</span><span id="ssDuration">0s</span></div>
-      <div class="session-row"><span>Total Frames</span><span id="ssFrames">0</span></div>
-      <div class="session-row"><span>Avg FPS</span><span id="ssAvgFPS">—</span></div>
-      <div class="session-row"><span>Avg Inference</span><span id="ssAvgInf">—</span></div>
-      <div class="session-row"><span>Peak FPS</span><span id="ssPeakFPS">—</span></div>
-      <div class="session-row"><span>Total Objects</span><span id="ssTotalObj">0</span></div>
-      <div class="session-row"><span>Top Class</span><span id="ssTopClass">—</span></div>
-    </div>
-
-    <!-- Export -->
-    <div class="export-row">
-      <button class="btn btn-secondary" id="btnExport">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        Export JSON
-      </button>
-      <button class="btn btn-secondary" id="btnLoadModel">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 9v10a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h10"/><polyline points="17,1 21,5 17,9"/><line x1="21" y1="5" x2="9" y2="5"/></svg>
-        Reload Model
-      </button>
-    </div>
-
-    <!-- Detection Log -->
-    <div>
-      <div class="panel-title">Detection Log</div>
-    </div>
-    <div class="detection-log" id="detectionLog">
-      <div class="log-empty">Detections will appear here…</div>
-    </div>
-
+ 
   </div>
-</main>
-
+</div>
+ 
+<div id="errorToast">Error message</div>
+ 
 <script>
-// ─── COCO 80 Classes ───────────────────────────────────────────────────────
-const COCO_CLASSES = [
-  'person','bicycle','car','motorcycle','airplane','bus','train','truck','boat',
-  'traffic light','fire hydrant','stop sign','parking meter','bench','bird','cat',
-  'dog','horse','sheep','cow','elephant','bear','zebra','giraffe','backpack',
-  'umbrella','handbag','tie','suitcase','frisbee','skis','snowboard','sports ball',
-  'kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket',
-  'bottle','wine glass','cup','fork','knife','spoon','bowl','banana','apple',
-  'sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake','chair',
-  'couch','potted plant','bed','dining table','toilet','tv','laptop','mouse',
-  'remote','keyboard','cell phone','microwave','oven','toaster','sink',
-  'refrigerator','book','clock','vase','scissors','teddy bear','hair drier',
-  'toothbrush'
-];
-
-// Box colours per class (cycle through palette)
-const PALETTE = [
-  '#00ff88','#0088ff','#ff4466','#ffcc00','#aa44ff',
-  '#ff8800','#00ccff','#ff44aa','#88ff00','#ff6644'
-];
-const classColor = (i) => PALETTE[i % PALETTE.length];
-
-// ─── State ─────────────────────────────────────────────────────────────────
-let session = null;
+// ─────────────────────────── State ───────────────────────────
 let stream = null;
-let animId = null;
 let running = false;
-let modelLoaded = false;
-
-let inputWidth = 640, inputHeight = 640;
-let modelSizeMB = 0;
-let gflops = 0;
-
-// Session metrics
-let sessionStart = null;
-let totalFrames = 0;
-let totalInfTime = 0;
-let totalObjects = 0;
-let peakFPS = 0;
-let classCounts = {};
+let animId = null;
 let fpsHistory = [];
-let lastFrameTime = performance.now();
-let fpsSmooth = 0;
-
-// ─── DOM ───────────────────────────────────────────────────────────────────
-const videoEl = document.getElementById('videoEl');
-const canvasEl = document.getElementById('canvasEl');
-const ctx = canvasEl.getContext('2d');
+let lastFrameTime = 0;
+let frameCount = 0;
+let fpsAccum = 0;
+let lastFpsUpdate = 0;
+const FPS_SAMPLES = 60;
+const SPARKLINE_POINTS = 50;
+const sparkData = new Array(SPARKLINE_POINTS).fill(0);
+let confidence = 0.40;
+let gflopsCache = null;
+ 
+const video = document.getElementById('videoEl');
+const canvas = document.getElementById('canvasOverlay');
+const ctx = canvas.getContext('2d');
 const placeholder = document.getElementById('placeholder');
-const videoWrapper = document.getElementById('videoWrapper');
-const loadingOverlay = document.getElementById('loadingOverlay');
-const loadingText = document.getElementById('loadingText');
-const loadingSub = document.getElementById('loadingSub');
-const statusDot = document.getElementById('statusDot');
-const statusText = document.getElementById('statusText');
-
-// Controls
-const btnStart = document.getElementById('btnStart');
-const btnStop = document.getElementById('btnStop');
-const btnReset = document.getElementById('btnReset');
-const btnExport = document.getElementById('btnExport');
-const btnLoadModel = document.getElementById('btnLoadModel');
-const confRange = document.getElementById('confRange');
-const iouRange = document.getElementById('iouRange');
-const confVal = document.getElementById('confVal');
-const iouVal = document.getElementById('iouVal');
-const modelPathInput = document.getElementById('modelPath');
-
-// Metrics
-const metFPS = document.getElementById('metFPS');
-const metInf = document.getElementById('metInf');
-const metObj = document.getElementById('metObj');
-const metConf = document.getElementById('metConf');
-const fpsBar = document.getElementById('fpsBar');
-
-// Model info
-const miStatus = document.getElementById('miStatus');
-const miShape = document.getElementById('miShape');
-const miSize = document.getElementById('miSize');
-const miGFLOP = document.getElementById('miGFLOP');
-const miBackend = document.getElementById('miBackend');
-const miClasses = document.getElementById('miClasses');
-
-// Session
-const ssDuration = document.getElementById('ssDuration');
-const ssFrames = document.getElementById('ssFrames');
-const ssAvgFPS = document.getElementById('ssAvgFPS');
-const ssAvgInf = document.getElementById('ssAvgInf');
-const ssPeakFPS = document.getElementById('ssPeakFPS');
-const ssTotalObj = document.getElementById('ssTotalObj');
-const ssTopClass = document.getElementById('ssTopClass');
-
-const detectionLog = document.getElementById('detectionLog');
-
-// ─── Utilities ─────────────────────────────────────────────────────────────
-function setStatus(state, text) {
-  statusDot.className = 'status-dot ' + state;
-  statusText.textContent = text;
+ 
+// ─────────────────────────── Log ───────────────────────────
+function log(msg, cls='') {
+  const box = document.getElementById('logBox');
+  const ts = new Date().toLocaleTimeString('en',{hour12:false});
+  box.innerHTML += `<br><span class="${cls}">[${ts}] ${msg}</span>`;
+  box.scrollTop = box.scrollHeight;
 }
-
-function showToast(msg, type = 'success') {
-  const t = document.getElementById('toast');
+ 
+// ─────────────────────────── Toast ───────────────────────────
+function showToast(msg) {
+  const t = document.getElementById('errorToast');
   t.textContent = msg;
-  t.className = 'toast ' + type + ' show';
-  setTimeout(() => { t.className = 'toast'; }, 3500);
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'), 3000);
 }
-
-function hideLoading() {
-  loadingOverlay.classList.add('hidden');
-  setTimeout(() => loadingOverlay.style.display = 'none', 600);
+ 
+// ─────────────────────────── Connection Indicator ───────────────────────────
+function setConn(state) {
+  const dot = document.getElementById('connDot');
+  const lbl = document.getElementById('connLabel');
+  dot.className = 'dot ' + (state==='live' ? 'live' : state==='error' ? 'error' : '');
+  lbl.textContent = state==='live' ? 'LIVE' : state==='error' ? 'ERROR' : 'DISCONNECTED';
 }
-
-function updateLoading(text, sub = '') {
-  loadingText.textContent = text;
-  loadingSub.textContent = sub;
-}
-
-// ─── ONNX Model Loading ────────────────────────────────────────────────────
-async function loadModel() {
-  const path = modelPathInput.value.trim() || 'models/yolo26n.onnx';
-  updateLoading('Loading ONNX model…', path);
-  miStatus.textContent = 'Loading…';
-  setStatus('', 'Loading model');
-
-  try {
-    // Fetch to get size
-    const res = await fetch(path);
-    if (!res.ok) throw new Error(`HTTP ${res.status} — file not found at: ${path}`);
-    const arrayBuffer = await res.arrayBuffer();
-    modelSizeMB = (arrayBuffer.byteLength / (1024 * 1024));
-
-    // Try WebGPU first, fall back to WASM
-    let usedBackend = 'wasm';
-    session = null;
-
-    if (navigator.gpu) {
-      try {
-        updateLoading('Requesting WebGPU adapter…', 'Checking GPU availability');
-        const adapter = await navigator.gpu.requestAdapter();
-        if (!adapter) throw new Error('No WebGPU adapter');
-        updateLoading('Creating inference session…', 'Compiling WebGPU shaders (first run may take a moment)');
-        session = await ort.InferenceSession.create(arrayBuffer, {
-          executionProviders: ['webgpu'],
-          graphOptimizationLevel: 'all',
-        });
-        usedBackend = 'webgpu';
-      } catch (gpuErr) {
-        console.warn('WebGPU unavailable, falling back to WASM:', gpuErr);
-        session = null;
-      }
-    }
-
-    if (!session) {
-      updateLoading('Creating inference session…', 'Compiling WebAssembly (WebGPU not available)');
-      ort.env.wasm.numThreads = Math.min(navigator.hardwareConcurrency || 2, 4);
-      session = await ort.InferenceSession.create(arrayBuffer, {
-        executionProviders: ['wasm'],
-        graphOptimizationLevel: 'all',
-      });
-      usedBackend = 'wasm';
-    }
-
-    // Inspect input shape
-    const inputName = session.inputNames[0];
-    const inputMeta = session.inputMetadata ? session.inputMetadata[inputName] : null;
-
-    // Default / detect shape
-    inputWidth = 640; inputHeight = 640;
-    if (inputMeta && inputMeta.dims) {
-      const dims = inputMeta.dims;
-      inputHeight = dims[2] || 640;
-      inputWidth = dims[3] || 640;
-    }
-
-    // Estimate GFLOPs for common YOLO configs
-    gflops = estimateGFLOPs(inputWidth, inputHeight, modelSizeMB);
-
-    miStatus.textContent = 'Loaded ✓';
-    miShape.textContent = `1×3×${inputHeight}×${inputWidth}`;
-    miSize.textContent = modelSizeMB.toFixed(2) + ' MB';
-    miGFLOP.textContent = gflops.toFixed(2) + ' GFLOPs';
-    miClasses.textContent = COCO_CLASSES.length;
-    miBackend.textContent = usedBackend === 'webgpu' ? '⚡ WebGPU' : 'WebAssembly';
-    miBackend.style.color = usedBackend === 'webgpu' ? 'var(--accent2)' : 'var(--accent)';
-
-    reusableTensor = null; // reset so it's rebuilt for new model shape
-    modelLoaded = true;
-    setStatus('ready', 'Model Ready');
-    btnStart.disabled = false;
-    showToast(`Model loaded (${usedBackend.toUpperCase()}) — ${modelSizeMB.toFixed(1)} MB`);
-
-  } catch (err) {
-    console.error(err);
-    miStatus.textContent = 'Error';
-    setStatus('error', 'Load Failed');
-    showToast('Model load failed: ' + err.message, 'error');
-  }
-}
-
-// Rough GFLOPs estimator based on model size heuristic
-function estimateGFLOPs(w, h, sizeMB) {
-  // Approximate: larger model = more params = more FLOPs
-  // Reference: yolo26n (6MB) ≈ 8.7 GFLOPs at 640×640
-  const baseGFLOPs = 8.7;
-  const baseMB = 6.0;
-  const scaleFactor = (w * h) / (640 * 640);
-  return (baseGFLOPs * (sizeMB / baseMB) * scaleFactor);
-}
-
-// ─── Camera ────────────────────────────────────────────────────────────────
+ 
+// ─────────────────────────── Slider ───────────────────────────
+document.getElementById('confSlider').addEventListener('input', e => {
+  confidence = parseFloat(e.target.value);
+  document.getElementById('confDisp').textContent = confidence.toFixed(2);
+});
+ 
+// ─────────────────────────── Camera ───────────────────────────
 async function startCamera() {
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
-      audio: false
+      video: { facingMode:'environment', width:{ideal:1280}, height:{ideal:720} }
     });
-    videoEl.srcObject = stream;
-    await new Promise(r => videoEl.onloadedmetadata = r);
-    await videoEl.play();
+    video.srcObject = stream;
+    video.style.display = 'block';
     placeholder.style.display = 'none';
-    videoWrapper.classList.add('active');
-    return true;
-  } catch (err) {
-    showToast('Camera error: ' + err.message, 'error');
-    return false;
+    document.getElementById('startBtn').disabled = true;
+    document.getElementById('stopBtn').disabled = false;
+    running = true;
+    log('Camera started', 'log-ok');
+ 
+    // Fetch model info once
+    fetchModelInfo();
+ 
+    video.onloadedmetadata = () => {
+      resizeCanvas();
+      loopFrame();
+    };
+  } catch(e) {
+    log('Camera error: ' + e.message, 'log-err');
+    showToast('Camera access denied');
   }
 }
-
-// ─── Preprocessing ─────────────────────────────────────────────────────────
-// Persistent offscreen canvas — created once, reused every frame
-let offscreen = null, offCtx = null;
-let offW = 0, offH = 0;
-// Reusable typed arrays — allocated once per input size
-let pixelBuf = null, float32Buf = null;
-
-function preprocessFrame(video, w, h) {
-  // Recreate only if size changed
-  if (!offscreen || offW !== w || offH !== h) {
-    offscreen = new OffscreenCanvas(w, h);
-    offCtx = offscreen.getContext('2d', { willReadFrequently: true });
-    offW = w; offH = h;
-    pixelBuf = new Uint8ClampedArray(w * h * 4);
-    float32Buf = new Float32Array(3 * w * h);
-  }
-  // Mirror horizontally to match the CSS-mirrored video element
-  offCtx.save();
-  offCtx.translate(w, 0);
-  offCtx.scale(-1, 1);
-  offCtx.drawImage(video, 0, 0, w, h);
-  offCtx.restore();
-
-  const imageData = offCtx.getImageData(0, 0, w, h);
-  const data = imageData.data;
-  const pixels = w * h;
-  for (let i = 0; i < pixels; i++) {
-    const src = i * 4;
-    float32Buf[i]           = data[src]     / 255.0; // R
-    float32Buf[pixels + i]  = data[src + 1] / 255.0; // G
-    float32Buf[pixels*2 + i]= data[src + 2] / 255.0; // B
-  }
-  return float32Buf;
+ 
+function stopCamera() {
+  running = false;
+  cancelAnimationFrame(animId);
+  if (stream) stream.getTracks().forEach(t=>t.stop());
+  video.style.display = 'none';
+  placeholder.style.display = 'flex';
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  setConn('');
+  resetMetrics();
+  log('Camera stopped');
 }
-
-// ─── Non-Max Suppression ───────────────────────────────────────────────────
-function iou(a, b) {
-  const x1 = Math.max(a[0], b[0]), y1 = Math.max(a[1], b[1]);
-  const x2 = Math.min(a[2], b[2]), y2 = Math.min(a[3], b[3]);
-  const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
-  const ua = (a[2]-a[0])*(a[3]-a[1]) + (b[2]-b[0])*(b[3]-b[1]) - inter;
-  return inter / ua;
+ 
+function resizeCanvas() {
+  canvas.width  = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.style.width  = '100%';
+  canvas.style.height = '100%';
 }
-
-function nms(boxes, iouThresh) {
-  boxes.sort((a, b) => b[4] - a[4]);
-  const kept = [];
-  const removed = new Set();
-  for (let i = 0; i < boxes.length; i++) {
-    if (removed.has(i)) continue;
-    kept.push(boxes[i]);
-    for (let j = i + 1; j < boxes.length; j++) {
-      if (!removed.has(j) && iou(boxes[i], boxes[j]) > iouThresh) removed.add(j);
+ 
+// ─────────────────────────── Frame Loop ───────────────────────────
+// Send a frame every N ms to avoid flooding slow servers
+const SEND_INTERVAL_MS = 80; // ~12.5 inference requests/sec max
+let lastSendTime = 0;
+let inFlight = false;
+ 
+function loopFrame(ts = 0) {
+  if (!running) return;
+  animId = requestAnimationFrame(loopFrame);
+ 
+  // FPS tracking (rendered frames)
+  const now = performance.now();
+  if (lastFrameTime) {
+    const delta = now - lastFrameTime;
+    fpsAccum++;
+    if (now - lastFpsUpdate > 500) {
+      const fps = fpsAccum / ((now - lastFpsUpdate) / 1000);
+      updateFPS(fps);
+      fpsAccum = 0;
+      lastFpsUpdate = now;
     }
   }
-  return kept;
-}
-
-// ─── Postprocessing ────────────────────────────────────────────────────────
-function postprocess(output, confThresh, iouThresh, origW, origH) {
-  // yolo26 output: [1, 84, 8400] (cx,cy,w,h + 80 class scores)
-  const data = output.data;
-  const dims = output.dims; // [1, num_channels, num_anchors]
-  const numChannels = dims[1];
-  const numAnchors = dims[2];
-
-  const boxes = [];
-
-  for (let i = 0; i < numAnchors; i++) {
-    // Find best class
-    let maxScore = 0, classId = 0;
-    for (let c = 4; c < numChannels; c++) {
-      const s = data[c * numAnchors + i];
-      if (s > maxScore) { maxScore = s; classId = c - 4; }
-    }
-    if (maxScore < confThresh) continue;
-
-    const cx = data[0 * numAnchors + i];
-    const cy = data[1 * numAnchors + i];
-    const bw = data[2 * numAnchors + i];
-    const bh = data[3 * numAnchors + i];
-
-    // Convert to corner format, scale to original
-    const x1 = (cx - bw / 2) / inputWidth  * origW;
-    const y1 = (cy - bh / 2) / inputHeight * origH;
-    const x2 = (cx + bw / 2) / inputWidth  * origW;
-    const y2 = (cy + bh / 2) / inputHeight * origH;
-
-    boxes.push([x1, y1, x2, y2, maxScore, classId]);
+  lastFrameTime = now;
+ 
+  // Send frame to backend at throttled rate
+  if (!inFlight && (now - lastSendTime) >= SEND_INTERVAL_MS) {
+    lastSendTime = now;
+    sendFrame(now);
   }
-
-  return nms(boxes, iouThresh);
 }
-
-// ─── Draw detections ───────────────────────────────────────────────────────
-function drawDetections(detections, canvasW, canvasH) {
-  ctx.clearRect(0, 0, canvasW, canvasH);
-
-  for (const [x1, y1, x2, y2, conf, classId] of detections) {
-    const label = COCO_CLASSES[classId] || `class_${classId}`;
-    const color = classColor(classId);
-
-    // Box
+ 
+// ─────────────────────────── Send Frame ───────────────────────────
+async function sendFrame(sentAt) {
+  inFlight = true;
+  const offscreen = document.createElement('canvas');
+  offscreen.width  = 640;
+  offscreen.height = 360;
+  const oc = offscreen.getContext('2d');
+  oc.drawImage(video, 0, 0, 640, 360);
+  offscreen.toBlob(async blob => {
+    const fd = new FormData();
+    fd.append('frame', blob, 'frame.jpg');
+    fd.append('conf', confidence);
+    const url = document.getElementById('serverUrl').value.replace(/\/$/, '') + '/detect';
+    try {
+      const res = await fetch(url, { method:'POST', body:fd });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const ms = Math.round(performance.now() - sentAt);
+      handleResult(data, ms);
+      setConn('live');
+    } catch(e) {
+      setConn('error');
+      log('Inference error: '+e.message, 'log-err');
+    } finally {
+      inFlight = false;
+    }
+  }, 'image/jpeg', 0.7);
+}
+ 
+// ─────────────────────────── Draw Results ───────────────────────────
+const PALETTE = [
+  '#00f5a0','#00b4d8','#ff6b35','#f72585','#7209b7',
+  '#3a86ff','#fb5607','#8338ec','#06d6a0','#ffbe0b'
+];
+const classColors = {};
+ 
+function handleResult(data, ms) {
+  const dets = data.detections || [];
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+ 
+  // Scale boxes from 640×360 back to canvas size
+  const scaleX = canvas.width / 640;
+  const scaleY = canvas.height / 360;
+ 
+  dets.forEach(d => {
+    const [x1,y1,x2,y2] = d.box;
+    if (!classColors[d.label]) {
+      classColors[d.label] = PALETTE[Object.keys(classColors).length % PALETTE.length];
+    }
+    const color = classColors[d.label];
+    const cx1=x1*scaleX, cy1=y1*scaleY, cw=(x2-x1)*scaleX, ch=(y2-y1)*scaleY;
+ 
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = 8;
-    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-    ctx.shadowBlur = 0;
-
-    // Corner accents
-    const cs = 10;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 3;
-    [[x1,y1],[x2,y1],[x1,y2],[x2,y2]].forEach(([px,py], idx) => {
-      const sx = idx % 2 === 0 ? 1 : -1;
-      const sy = idx < 2 ? 1 : -1;
-      ctx.beginPath();
-      ctx.moveTo(px + sx * cs, py);
-      ctx.lineTo(px, py);
-      ctx.lineTo(px, py + sy * cs);
-      ctx.stroke();
-    });
-
-    // Label background
-    const text = `${label} ${(conf * 100).toFixed(0)}%`;
-    ctx.font = '600 12px JetBrains Mono, monospace';
-    const tw = ctx.measureText(text).width;
-    const lh = 20;
-    const lpad = 6;
+    ctx.strokeRect(cx1, cy1, cw, ch);
+ 
+    // Label pill
+    const label = `${d.label} ${(d.confidence*100).toFixed(0)}%`;
+    ctx.font = 'bold 12px Syne Mono, monospace';
+    const tw = ctx.measureText(label).width;
     ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.roundRect(x1, y1 - lh - 4, tw + lpad * 2, lh, 4);
-    ctx.fill();
-
-    // Label text
-    ctx.fillStyle = '#080b0f';
-    ctx.fillText(text, x1 + lpad, y1 - 7);
-  }
+    ctx.fillRect(cx1, cy1 - 22, tw + 10, 20);
+    ctx.fillStyle = '#000';
+    ctx.fillText(label, cx1 + 5, cy1 - 7);
+  });
+ 
+  updateDetectionList(dets);
+  updateMetrics(ms, dets.length, data.model_gflops);
+  if (data.model_info) updateModelInfo(data.model_info);
 }
-
-// ─── Detection loop ────────────────────────────────────────────────────────
-// Reuse tensor object — avoid GC pressure each frame
-let reusableTensor = null;
-
-async function detectionLoop() {
-  if (!running || !session) return;
-
-  const now = performance.now();
-  const delta = now - lastFrameTime;
-  lastFrameTime = now;
-
-  // Update FPS
-  const instFPS = 1000 / delta;
-  fpsSmooth = fpsSmooth * 0.8 + instFPS * 0.2;
-  peakFPS = Math.max(peakFPS, fpsSmooth);
-  fpsHistory.push(fpsSmooth);
-  if (fpsHistory.length > 300) fpsHistory.shift();
-
-  // Resize canvas only when display size actually changes (avoids context reset every frame)
-  const cw = videoEl.clientWidth, ch = videoEl.clientHeight;
-  if (canvasEl.width !== cw || canvasEl.height !== ch) {
-    canvasEl.width = cw;
-    canvasEl.height = ch;
+ 
+// ─────────────────────────── Metrics ───────────────────────────
+function updateFPS(fps) {
+  const el = document.getElementById('fpsVal');
+  el.textContent = fps.toFixed(1);
+  el.className = 'metric-value ' + (fps>20?'good':fps>10?'mid':'bad');
+  // sparkline
+  sparkData.shift();
+  sparkData.push(fps);
+  drawSparkline();
+  flashCard('fpsMC');
+}
+ 
+function updateMetrics(ms, count, gflops) {
+  document.getElementById('msVal').textContent = ms;
+  document.getElementById('countVal').textContent = count;
+  if (gflops !== undefined && gflops !== null) {
+    document.getElementById('gflopsVal').textContent = parseFloat(gflops).toFixed(1);
+    flashCard('gflopsMC');
   }
-
-  const confThresh = parseFloat(confRange.value);
-  const iouThresh  = parseFloat(iouRange.value);
-
-  // Preprocess — reuses persistent offscreen canvas + typed arrays
-  const float32 = preprocessFrame(videoEl, inputWidth, inputHeight);
-
-  // Reuse tensor dims to avoid re-allocating the wrapper each frame
-  if (!reusableTensor) {
-    reusableTensor = new ort.Tensor('float32', float32, [1, 3, inputHeight, inputWidth]);
+  flashCard('msMC');
+  flashCard('countMC');
+}
+ 
+function updateModelInfo(info) {
+  if (info.name)   document.getElementById('mName').textContent   = info.name;
+  if (info.params) document.getElementById('mParams').textContent = info.params;
+  if (info.device) document.getElementById('mDevice').textContent = info.device;
+  if (info.imgsz)  document.getElementById('mImgsz').textContent  = info.imgsz;
+}
+ 
+function resetMetrics() {
+  ['fpsVal','msVal','gflopsVal','countVal'].forEach(id=>document.getElementById(id).textContent='—');
+  document.getElementById('countVal').textContent='0';
+  sparkData.fill(0); drawSparkline();
+}
+ 
+function flashCard(id) {
+  const el = document.getElementById(id);
+  el.classList.remove('updated');
+  void el.offsetWidth;
+  el.classList.add('updated');
+  setTimeout(()=>el.classList.remove('updated'), 400);
+}
+ 
+function drawSparkline() {
+  const poly = document.getElementById('sparkPoly');
+  const svgEl = document.getElementById('sparkline');
+  const W = svgEl.clientWidth || 260;
+  const H = 48;
+  const max = Math.max(...sparkData, 30);
+  const pts = sparkData.map((v,i) => {
+    const x = (i / (SPARKLINE_POINTS-1)) * W;
+    const y = H - (v / max) * (H - 4);
+    return `${x},${y}`;
+  }).join(' ');
+  poly.setAttribute('points', pts);
+}
+ 
+// ─────────────────────────── Detection List ───────────────────────────
+function updateDetectionList(dets) {
+  const el = document.getElementById('detectionList');
+  if (!dets.length) {
+    el.innerHTML = '<div class="no-detections">No objects detected</div>';
+    return;
   }
-  // float32Buf is already updated in-place by preprocessFrame, tensor.data points to it
-
-  // Inference
-  const t0 = performance.now();
-  let detections = [];
+  // Aggregate by label
+  const agg = {};
+  dets.forEach(d => {
+    if (!agg[d.label]) agg[d.label] = { count:0, maxConf:0 };
+    agg[d.label].count++;
+    agg[d.label].maxConf = Math.max(agg[d.label].maxConf, d.confidence);
+  });
+  el.innerHTML = Object.entries(agg)
+    .sort((a,b)=>b[1].maxConf - a[1].maxConf)
+    .map(([lbl,{count,maxConf}]) => `
+      <div class="det-item">
+        <span class="det-label">${lbl}${count>1?`<span class="det-count">${count}</span>`:''}</span>
+        <span class="det-conf">${(maxConf*100).toFixed(1)}%</span>
+      </div>`)
+    .join('');
+}
+ 
+// ─────────────────────────── Model Info ───────────────────────────
+async function fetchModelInfo() {
+  const url = document.getElementById('serverUrl').value.replace(/\/$/, '') + '/model_info';
   try {
-    const results = await session.run({ [session.inputNames[0]]: reusableTensor });
-    const output = results[session.outputNames[0]];
-    detections = postprocess(output, confThresh, iouThresh, canvasEl.width, canvasEl.height);
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const info = await res.json();
+    updateModelInfo(info);
+    if (info.gflops) document.getElementById('gflopsVal').textContent = parseFloat(info.gflops).toFixed(1);
+    log('Model loaded: ' + (info.name||'unknown'), 'log-ok');
   } catch(e) {
-    console.warn('Inference error:', e);
-  }
-  const infTime = performance.now() - t0;
-
-  // Draw
-  drawDetections(detections, canvasEl.width, canvasEl.height);
-
-  // Update metrics
-  totalFrames++;
-  totalInfTime += infTime;
-  totalObjects += detections.length;
-
-  // Class counts
-  for (const [,,,,, cid] of detections) {
-    const name = COCO_CLASSES[cid] || `class_${cid}`;
-    classCounts[name] = (classCounts[name] || 0) + 1;
-  }
-
-  // Average confidence
-  const avgConf = detections.length
-    ? detections.reduce((s, d) => s + d[4], 0) / detections.length
-    : null;
-
-  // Live UI
-  metFPS.textContent = fpsSmooth.toFixed(1);
-  metInf.textContent = infTime.toFixed(1);
-  metObj.textContent = detections.length;
-  metConf.textContent = avgConf !== null ? avgConf.toFixed(2) : '—';
-  fpsBar.style.width = Math.min(fpsSmooth / 30 * 100, 100) + '%';
-
-  // Session UI
-  const elapsed = Math.floor((Date.now() - sessionStart) / 1000);
-  ssDuration.textContent = formatDuration(elapsed);
-  ssFrames.textContent = totalFrames;
-  ssAvgFPS.textContent = fpsHistory.length ? (fpsHistory.reduce((a,b)=>a+b,0)/fpsHistory.length).toFixed(1) : '—';
-  ssAvgInf.textContent = totalFrames ? (totalInfTime / totalFrames).toFixed(1) + 'ms' : '—';
-  ssPeakFPS.textContent = peakFPS.toFixed(1);
-  ssTotalObj.textContent = totalObjects;
-
-  const topClass = Object.entries(classCounts).sort((a,b)=>b[1]-a[1])[0];
-  ssTopClass.textContent = topClass ? topClass[0] : '—';
-
-  // Log new detections
-  if (detections.length > 0 && totalFrames % 5 === 0) {
-    addLogEntries(detections, infTime);
-  }
-
-  animId = requestAnimationFrame(detectionLoop);
-}
-
-function formatDuration(s) {
-  const m = Math.floor(s / 60), sec = s % 60;
-  return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
-}
-
-function addLogEntries(detections, infTime) {
-  const now = new Date().toLocaleTimeString('en-US', {hour12: false});
-  if (detectionLog.querySelector('.log-empty')) detectionLog.innerHTML = '';
-
-  const unique = {};
-  for (const [,,,,conf, cid] of detections) {
-    const name = COCO_CLASSES[cid] || `class_${cid}`;
-    if (!unique[name] || conf > unique[name]) unique[name] = conf;
-  }
-
-  for (const [name, conf] of Object.entries(unique).slice(0,3)) {
-    const entry = document.createElement('div');
-    entry.className = 'log-entry';
-    entry.innerHTML = `
-      <span class="log-class">${name}</span>
-      <span class="log-conf">${(conf*100).toFixed(0)}%</span>
-      <span class="log-time">${now}</span>
-    `;
-    detectionLog.insertBefore(entry, detectionLog.firstChild);
-    if (detectionLog.children.length > 50) {
-      detectionLog.removeChild(detectionLog.lastChild);
-    }
+    log('Could not fetch model info (server may need CORS)', 'log-err');
   }
 }
-
-// ─── Controls ──────────────────────────────────────────────────────────────
-btnStart.addEventListener('click', async () => {
-  if (!modelLoaded) { showToast('Model not loaded yet', 'error'); return; }
-
-  if (!stream) {
-    const ok = await startCamera();
-    if (!ok) return;
-  }
-
-  running = true;
-  sessionStart = sessionStart || Date.now();
-  lastFrameTime = performance.now();
-  setStatus('running', 'Running');
-  btnStart.disabled = true;
-  btnStop.disabled = false;
-  document.getElementById('cardFPS').classList.add('active');
-  document.getElementById('cardInf').classList.add('active');
-
-  detectionLoop();
-});
-
-btnStop.addEventListener('click', () => {
-  running = false;
-  if (animId) cancelAnimationFrame(animId);
-  setStatus('ready', 'Paused');
-  btnStart.disabled = false;
-  btnStop.disabled = true;
-  document.getElementById('cardFPS').classList.remove('active');
-});
-
-btnReset.addEventListener('click', () => {
-  running = false;
-  if (animId) cancelAnimationFrame(animId);
-  totalFrames = 0; totalInfTime = 0; totalObjects = 0;
-  peakFPS = 0; fpsHistory = []; classCounts = {};
-  sessionStart = null; fpsSmooth = 0;
-
-  metFPS.textContent = '—';
-  metInf.textContent = '—';
-  metObj.textContent = '0';
-  metConf.textContent = '—';
-  fpsBar.style.width = '0%';
-  ssDuration.textContent = '0s';
-  ssFrames.textContent = '0';
-  ssAvgFPS.textContent = '—';
-  ssAvgInf.textContent = '—';
-  ssPeakFPS.textContent = '—';
-  ssTotalObj.textContent = '0';
-  ssTopClass.textContent = '—';
-  detectionLog.innerHTML = '<div class="log-empty">Detections will appear here…</div>';
-  ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
-
-  if (modelLoaded) {
-    setStatus('ready', 'Model Ready');
-    btnStart.disabled = false;
-  }
-  btnStop.disabled = true;
-  showToast('Session reset');
-});
-
-btnLoadModel.addEventListener('click', loadModel);
-
-btnExport.addEventListener('click', () => {
-  const report = {
-    timestamp: new Date().toISOString(),
-    model: {
-      path: modelPathInput.value,
-      sizeMB: modelSizeMB.toFixed(2),
-      estimatedGFLOPs: gflops.toFixed(2),
-      inputShape: `1x3x${inputHeight}x${inputWidth}`,
-      backend: 'WebAssembly (ONNX Runtime Web)',
-    },
-    session: {
-      durationSeconds: sessionStart ? Math.floor((Date.now() - sessionStart) / 1000) : 0,
-      totalFrames,
-      totalObjectsDetected: totalObjects,
-      averageFPS: fpsHistory.length ? +(fpsHistory.reduce((a,b)=>a+b,0)/fpsHistory.length).toFixed(2) : 0,
-      peakFPS: +peakFPS.toFixed(2),
-      averageInferenceMs: totalFrames ? +(totalInfTime / totalFrames).toFixed(2) : 0,
-    },
-    classCounts,
-  };
-  const blob = new Blob([JSON.stringify(report, null, 2)], {type:'application/json'});
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `yolovision_session_${Date.now()}.json`;
-  a.click();
-  showToast('Session exported');
-});
-
-confRange.addEventListener('input', () => { confVal.textContent = parseFloat(confRange.value).toFixed(2); });
-iouRange.addEventListener('input',  () => { iouVal.textContent  = parseFloat(iouRange.value).toFixed(2); });
-
-// ─── Initialise ────────────────────────────────────────────────────────────
-(async () => {
-  updateLoading('Initializing ONNX Runtime…', 'Loading WebAssembly backend');
-  setStatus('', 'Initializing');
-
-  // Brief delay so ORT initialises
-  await new Promise(r => setTimeout(r, 800));
-
-  updateLoading('Setting up environment…', 'Configuring execution providers');
-  await new Promise(r => setTimeout(r, 400));
-
-  hideLoading();
-  setStatus('', 'Ready to load model');
-  showToast('Runtime ready — load your model to begin');
-
-  // Auto-load if path set
-  await loadModel();
-})();
+ 
+// Resize canvas on window resize
+window.addEventListener('resize', () => { if (running) resizeCanvas(); });
+ 
+log('YOLOVision ready.', 'log-info');
 </script>
 </body>
 </html>
