@@ -635,7 +635,7 @@
       </div>
       <div class="config-card" style="grid-column: span 1;">
         <div class="config-label">ONNX Model Path (relative to repo root)</div>
-        <input type="text" class="model-path-input" id="modelPath" value="models/yolov8n.onnx" placeholder="models/yolov8n.onnx">
+        <input type="text" class="model-path-input" id="modelPath" value="models/yolo26n.onnx" placeholder="models/yolo26n.onnx">
       </div>
     </div>
   </div>
@@ -841,7 +841,7 @@ function updateLoading(text, sub = '') {
 
 // ─── ONNX Model Loading ────────────────────────────────────────────────────
 async function loadModel() {
-  const path = modelPathInput.value.trim() || 'models/yolov8n.onnx';
+  const path = modelPathInput.value.trim() || 'models/yolo26n.onnx';
   updateLoading('Loading ONNX model…', path);
   miStatus.textContent = 'Loading…';
   setStatus('', 'Loading model');
@@ -923,7 +923,7 @@ async function loadModel() {
 // Rough GFLOPs estimator based on model size heuristic
 function estimateGFLOPs(w, h, sizeMB) {
   // Approximate: larger model = more params = more FLOPs
-  // Reference: YOLOv8n (6MB) ≈ 8.7 GFLOPs at 640×640
+  // Reference: yolo26n (6MB) ≈ 8.7 GFLOPs at 640×640
   const baseGFLOPs = 8.7;
   const baseMB = 6.0;
   const scaleFactor = (w * h) / (640 * 640);
@@ -991,7 +991,7 @@ function nms(boxes, iouThresh) {
 
 // ─── Postprocessing ────────────────────────────────────────────────────────
 function postprocess(output, confThresh, iouThresh, origW, origH) {
-  // YOLOv8 output: [1, 84, 8400] (cx,cy,w,h + 80 class scores)
+  // yolo26 output: [1, 84, 8400] (cx,cy,w,h + 80 class scores)
   const data = output.data;
   const dims = output.dims; // [1, num_channels, num_anchors]
   const numChannels = dims[1];
